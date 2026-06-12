@@ -1,0 +1,86 @@
+# ==================================================
+# Training Configuration
+# ==================================================
+
+project_name: "human_action_recognition"
+
+seed: 42
+
+# ==================================================
+# Dataset
+# ==================================================
+
+dataset:
+  name: "UCF101"
+
+  raw_dir: "data/raw/UCF101"
+
+  processed_frames_dir: "data/processed/frames"
+
+  train_dir: "data/train"
+  val_dir: "data/val"
+  test_dir: "data/test"
+
+  image_size: 224
+
+  sequence_length: 16
+
+  num_workers: 4
+
+# ==================================================
+# Training
+# ==================================================
+
+training:
+  batch_size: 8
+
+  epochs: 20
+
+  learning_rate: 0.001
+
+  weight_decay: 0.0001
+
+  optimizer: "adam"
+
+  scheduler: "cosine"
+
+# ==================================================
+# Model
+# ==================================================
+
+model:
+  architecture: "cnn_lstm"
+
+  backbone: "mobilenet_v3_small"
+
+  hidden_size: 256
+
+  num_layers: 2
+
+  dropout: 0.3
+
+# ==================================================
+# Checkpoints
+# ==================================================
+
+checkpoint:
+  save_dir: "weights/checkpoints"
+
+  save_best_only: true
+
+# ==================================================
+# Logging
+# ==================================================
+
+logging:
+  tensorboard_dir: "logs/tensorboard"
+
+  log_interval: 10
+
+# ==================================================
+# Evaluation
+# ==================================================
+
+evaluation:
+  top_k: 5
+
