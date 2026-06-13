@@ -135,8 +135,8 @@ if __name__ == "__main__":
     generator = SequenceGenerator(
         input_dir=config.dataset.processed_frames_dir,
         output_dir=config.dataset.processed_sequences_dir,
-        sequence_length=config.dataset.sequence_length,
-        stride=8
+        sequence_length=8,
+        stride=4
     )
 
     generator.run()

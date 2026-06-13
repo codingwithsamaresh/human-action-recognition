@@ -3,13 +3,6 @@ Main Training Script
 
 Trains the CNN-LSTM baseline model
 using train/validation splits.
-
-Folder Structure:
-
-data/
-├── train/
-├── val/
-└── test/
 """
 
 import torch
@@ -41,8 +34,20 @@ from src.utils.device import (
     get_device
 )
 
+from src.utils.config_loader import (
+    ConfigLoader
+)
+
 
 def main():
+
+    # -------------------------
+    # Config
+    # -------------------------
+
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
+    )
 
     # -------------------------
     # Device
@@ -60,15 +65,21 @@ def main():
 
     train_dataset = (
         ActionSequenceDataset(
-            sequence_root="data/train",
-            transform=get_train_transforms()
+            sequence_root=
+            config.dataset.train_dir,
+
+            transform=
+            get_train_transforms()
         )
     )
 
     val_dataset = (
         ActionSequenceDataset(
-            sequence_root="data/val",
-            transform=get_val_transforms()
+            sequence_root=
+            config.dataset.val_dir,
+
+            transform=
+            get_val_transforms()
         )
     )
 
@@ -118,18 +129,22 @@ def main():
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=4,
+        batch_size=8,
         shuffle=True,
-        num_workers=2,
-        pin_memory=torch.cuda.is_available()
+        num_workers=
+        config.dataset.num_workers,
+        pin_memory=
+        torch.cuda.is_available()
     )
 
     val_loader = DataLoader(
         val_dataset,
-        batch_size=4,
+        batch_size=8,
         shuffle=False,
-        num_workers=2,
-        pin_memory=torch.cuda.is_available()
+        num_workers=
+        config.dataset.num_workers,
+        pin_memory=
+        torch.cuda.is_available()
     )
 
     # -------------------------
@@ -137,7 +152,16 @@ def main():
     # -------------------------
 
     model = CNNLSTMBaseline(
-        num_classes=num_classes
+        num_classes=num_classes,
+
+        hidden_size=
+        config.model.hidden_size,
+
+        num_layers=
+        config.model.num_layers,
+
+        dropout=
+        config.model.dropout
     )
 
     model.to(device)
@@ -160,7 +184,20 @@ def main():
 
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=1e-3
+        lr=
+        config.training.learning_rate,
+        weight_decay=
+        config.training.weight_decay
+    )
+
+    # -------------------------
+    # Checkpoint Directory
+    # -------------------------
+
+    checkpoint_dir = (
+        "/content/drive/MyDrive/"
+        "human_action_recognition/"
+        "weights/checkpoints"
     )
 
     # -------------------------
@@ -173,14 +210,16 @@ def main():
         optimizer=optimizer,
         device=device,
         checkpoint_dir=
-        "weights/checkpoints"
+        checkpoint_dir
     )
 
     # -------------------------
     # Train
     # -------------------------
 
-    epochs = 10
+    epochs = (
+        config.training.epochs
+    )
 
     print(
         f"Starting Training "
@@ -202,8 +241,8 @@ def main():
     )
 
     print(
-        "weights/checkpoints/"
-        "best_model.pth\n"
+        checkpoint_dir +
+        "/best_model.pth\n"
     )
 
 
