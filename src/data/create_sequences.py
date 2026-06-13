@@ -124,12 +124,18 @@ class SequenceGenerator:
         )
 
 
+from src.utils.config_loader import ConfigLoader
+
 if __name__ == "__main__":
 
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
+    )
+
     generator = SequenceGenerator(
-        input_dir="data/processed/frames",
-        output_dir="data/processed/sequences",
-        sequence_length=16,
+        input_dir=config.dataset.processed_frames_dir,
+        output_dir=config.dataset.processed_sequences_dir,
+        sequence_length=config.dataset.sequence_length,
         stride=8
     )
 
