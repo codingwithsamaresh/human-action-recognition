@@ -95,6 +95,19 @@ pip install -r requirements.txt
 
 ---
 
+Human Action Recognition system using a CNN-LSTM architecture.
+
+* Dataset: UCF101 (25 selected action classes)
+* Backbone: MobileNetV3-Small
+* Temporal Encoder: LSTM
+* Sequence Length: 8 frames
+* Training Device: NVIDIA Tesla T4
+* Validation Accuracy: 79.53%
+* Framework: PyTorch
+
+The system performs action classification from short video clips by combining spatial feature extraction with temporal sequence modeling.
+
+
 ## Author
 
 Samaresh Koley
