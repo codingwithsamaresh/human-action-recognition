@@ -1,0 +1,18 @@
+dataset:
+  raw_dir: "/content/drive/MyDrive/human_action_recognition/datasets/raw/UCF101_subset"
+
+  processed_frames_dir: "/content/drive/MyDrive/human_action_recognition/datasets/processed/frames"
+
+  processed_sequences_dir: "/content/drive/MyDrive/human_action_recognition/datasets/processed/sequences"
+
+  train_dir: "/content/drive/MyDrive/human_action_recognition/datasets/train"
+
+  val_dir: "/content/drive/MyDrive/human_action_recognition/datasets/val"
+
+  test_dir: "/content/drive/MyDrive/human_action_recognition/datasets/test"
+
+  image_size: 224
+
+  sequence_length: 16
+
+  num_workers: 2
