@@ -174,20 +174,23 @@ class DatasetSplitter:
         )
 
 
+from src.utils.config_loader import ConfigLoader
+
+
 if __name__ == "__main__":
 
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
+    )
+
     splitter = DatasetSplitter(
-        source_dir=
-        "data/processed/sequences",
+        source_dir=config.dataset.processed_sequences_dir,
 
-        train_dir=
-        "data/train",
+        train_dir=config.dataset.train_dir,
 
-        val_dir=
-        "data/val",
+        val_dir=config.dataset.val_dir,
 
-        test_dir=
-        "data/test"
+        test_dir=config.dataset.test_dir
     )
 
     splitter.run()
