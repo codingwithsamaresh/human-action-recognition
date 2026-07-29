@@ -1,8 +1,29 @@
+"""
+Split generated sequences into train, validation, and test sets.
+
+Input:
+processed/
+└── sequences/
+    ├── Basketball/
+    │   ├── v_Basketball_g01_c01/
+    │   │   ├── sequence_000000.txt
+    │   │   └── ...
+    │   ├── v_Basketball_g01_c02/
+    │   └── ...
+    └── ...
+
+Output:
+train/
+val/
+test/
+"""
+
 from pathlib import Path
 import shutil
 import random
 
 from src.utils.logger import get_logger
+from src.utils.config_loader import ConfigLoader
 
 logger = get_logger("dataset_splitter")
 
@@ -34,31 +55,62 @@ class DatasetSplitter:
         random.seed(seed)
 
         total = (
-            train_ratio
-            + val_ratio
-            + test_ratio
+            train_ratio +
+            val_ratio +
+            test_ratio
         )
 
         if abs(total - 1.0) > 1e-6:
             raise ValueError(
-                "Train/Val/Test ratios "
-                "must sum to 1.0"
+                "Train/Val/Test ratios must sum to 1."
             )
 
-    def copy_file(
+        self.total_sequences = 0
+
+    def copy_sequence(
         self,
-        src,
-        dst
+        src_file,
+        dst_file
     ):
-        dst.parent.mkdir(
+
+        dst_file.parent.mkdir(
             parents=True,
             exist_ok=True
         )
 
         shutil.copy2(
-            src,
-            dst
+            src_file,
+            dst_file
         )
+
+        self.total_sequences += 1
+
+    def copy_video(
+        self,
+        video_dir,
+        destination_root,
+        class_name
+    ):
+
+        sequence_files = sorted(
+            video_dir.glob("*.txt")
+        )
+
+        for seq_file in sequence_files:
+
+            destination = (
+                destination_root /
+                class_name /
+                video_dir.name /
+                seq_file.name
+            )
+
+            self.copy_sequence(
+                seq_file,
+                destination
+            )
+
+        return len(sequence_files)
 
     def split_class(
         self,
@@ -67,81 +119,75 @@ class DatasetSplitter:
 
         class_name = class_dir.name
 
-        sequence_files = sorted(
-            class_dir.glob("*.txt")
-        )
+        video_dirs = sorted([
+            x
+            for x in class_dir.iterdir()
+            if x.is_dir()
+        ])
 
-        if len(sequence_files) == 0:
+        if len(video_dirs) == 0:
 
             logger.warning(
-                f"No sequence files found in "
-                f"{class_dir}"
+                f"No videos found for {class_name}"
             )
 
             return
 
-        random.shuffle(
-            sequence_files
-        )
+        random.shuffle(video_dirs)
 
-        n = len(sequence_files)
+        n = len(video_dirs)
 
         train_end = int(
             n * self.train_ratio
         )
 
         val_end = (
-            train_end
-            +
+            train_end +
             int(n * self.val_ratio)
         )
 
-        train_sequences = (
-            sequence_files[:train_end]
-        )
+        train_videos = video_dirs[:train_end]
+        val_videos = video_dirs[train_end:val_end]
+        test_videos = video_dirs[val_end:]
 
-        val_sequences = (
-            sequence_files[
-                train_end:val_end
-            ]
-        )
+        train_sequences = 0
+        val_sequences = 0
+        test_sequences = 0
 
-        test_sequences = (
-            sequence_files[val_end:]
-        )
+        for video_dir in train_videos:
 
-        for seq_file in train_sequences:
-
-            self.copy_file(
-                seq_file,
-                self.train_dir
-                / class_name
-                / seq_file.name
+            train_sequences += self.copy_video(
+                video_dir,
+                self.train_dir,
+                class_name
             )
 
-        for seq_file in val_sequences:
+        for video_dir in val_videos:
 
-            self.copy_file(
-                seq_file,
-                self.val_dir
-                / class_name
-                / seq_file.name
+            val_sequences += self.copy_video(
+                video_dir,
+                self.val_dir,
+                class_name
             )
 
-        for seq_file in test_sequences:
+        for video_dir in test_videos:
 
-            self.copy_file(
-                seq_file,
-                self.test_dir
-                / class_name
-                / seq_file.name
+            test_sequences += self.copy_video(
+                video_dir,
+                self.test_dir,
+                class_name
             )
 
         logger.info(
             f"{class_name}: "
-            f"train={len(train_sequences)} "
-            f"val={len(val_sequences)} "
-            f"test={len(test_sequences)}"
+            f"videos="
+            f"{len(train_videos)}/"
+            f"{len(val_videos)}/"
+            f"{len(test_videos)} | "
+            f"sequences="
+            f"{train_sequences}/"
+            f"{val_sequences}/"
+            f"{test_sequences}"
         )
 
     def run(self):
@@ -153,28 +199,47 @@ class DatasetSplitter:
                 f"{self.source_dir}"
             )
 
-        classes = [
+        for directory in [
+            self.train_dir,
+            self.val_dir,
+            self.test_dir
+        ]:
+
+            if directory.exists():
+
+                shutil.rmtree(directory)
+
+            directory.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+
+        class_dirs = sorted([
             x
             for x in self.source_dir.iterdir()
             if x.is_dir()
-        ]
+        ])
 
         logger.info(
-            f"Found {len(classes)} classes"
+            f"Found {len(class_dirs)} classes."
         )
 
-        for class_dir in classes:
+        for class_dir in class_dirs:
 
             self.split_class(
                 class_dir
             )
 
+        logger.info("-" * 60)
+
         logger.info(
-            "Dataset split complete."
+            f"Total sequences copied: "
+            f"{self.total_sequences}"
         )
 
-
-from src.utils.config_loader import ConfigLoader
+        logger.info(
+            "Dataset splitting complete."
+        )
 
 
 if __name__ == "__main__":
@@ -190,7 +255,13 @@ if __name__ == "__main__":
 
         val_dir=config.dataset.val_dir,
 
-        test_dir=config.dataset.test_dir
+        test_dir=config.dataset.test_dir,
+
+        train_ratio=0.70,
+        val_ratio=0.15,
+        test_ratio=0.15,
+
+        seed=config.seed
     )
 
     splitter.run()

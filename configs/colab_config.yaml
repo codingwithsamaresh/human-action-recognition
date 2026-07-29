@@ -26,6 +26,9 @@ dataset:
   image_size: 224
   sequence_length: 8
   num_workers: 2
+  sequence_stride: 4
+
+  sample_rate: 3
 # ==================================================
 # Training
 # ==================================================

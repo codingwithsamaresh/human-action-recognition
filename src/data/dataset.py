@@ -11,15 +11,24 @@ class ActionSequenceDataset(Dataset):
     """
     Dataset for Human Action Recognition.
 
-    Expected Structure:
-    data/processed/sequences/
-    ├── Class1/
-    │   ├── sequence_000000.txt
-    │   ├── sequence_000001.txt
-    │   └── ...
-    ├── Class2/
-    │   ├── sequence_000000.txt
-    │   └── ...
+    Expected Directory Structure
+    ----------------------------
+
+    processed/
+    └── sequences/
+        ├── Basketball/
+        │   ├── v_Basketball_g01_c01/
+        │   │   ├── sequence_000000.txt
+        │   │   ├── sequence_000004.txt
+        │   │   └── ...
+        │   ├── v_Basketball_g01_c02/
+        │   └── ...
+        │
+        ├── BoxingSpeedBag/
+        └── ...
+
+    Each sequence text file contains the absolute path
+    of every frame belonging to that sequence.
     """
 
     def __init__(
@@ -28,32 +37,36 @@ class ActionSequenceDataset(Dataset):
         image_size=224,
         transform=None
     ):
-        """
-        Args:
-            sequence_root (str): Root directory containing sequence txt files.
-            image_size (int): Resize dimension for default transform.
-            transform: torchvision transform pipeline.
-        """
 
         self.sequence_root = Path(sequence_root)
 
         if not self.sequence_root.exists():
             raise FileNotFoundError(
-                f"Sequence directory not found: {self.sequence_root}"
+                f"Sequence directory not found: "
+                f"{self.sequence_root}"
             )
 
-        # Default transform
+        # -------------------------------------------------
+        # Image Transform
+        # -------------------------------------------------
+
         if transform is None:
+
             self.transform = transforms.Compose([
-                transforms.Resize((image_size, image_size)),
+                transforms.Resize(
+                    (image_size, image_size)
+                ),
                 transforms.ToTensor(),
             ])
+
         else:
+
             self.transform = transform
 
-        self.samples = []
+        # -------------------------------------------------
+        # Discover Classes
+        # -------------------------------------------------
 
-        # Discover classes
         class_names = sorted([
             d.name
             for d in self.sequence_root.iterdir()
@@ -61,51 +74,88 @@ class ActionSequenceDataset(Dataset):
         ])
 
         if len(class_names) == 0:
+
             raise RuntimeError(
-                f"No class folders found in {self.sequence_root}"
+                f"No class folders found in "
+                f"{self.sequence_root}"
             )
 
         self.class_to_idx = {
             class_name: idx
-            for idx, class_name in enumerate(class_names)
+            for idx, class_name
+            in enumerate(class_names)
         }
 
         self.idx_to_class = {
             idx: class_name
-            for class_name, idx in self.class_to_idx.items()
+            for class_name, idx
+            in self.class_to_idx.items()
         }
 
-        # Gather all sequence files
+        # -------------------------------------------------
+        # Discover All Sequence Files
+        # -------------------------------------------------
+
+        self.samples = []
+
         for class_name in class_names:
 
-            class_dir = self.sequence_root / class_name
+            class_dir = (
+                self.sequence_root /
+                class_name
+            )
 
             sequence_files = sorted(
-                class_dir.glob("*.txt")
+                class_dir.rglob("*.txt")
             )
+
+            if len(sequence_files) == 0:
+
+                print(
+                    f"Warning: No sequences found "
+                    f"for class '{class_name}'"
+                )
+
+                continue
 
             for sequence_file in sequence_files:
 
                 self.samples.append(
                     (
                         sequence_file,
-                        self.class_to_idx[class_name]
+                        self.class_to_idx[
+                            class_name
+                        ]
                     )
                 )
 
         if len(self.samples) == 0:
+
             raise RuntimeError(
-                f"No sequence files found in {self.sequence_root}"
+                f"No sequence files found in "
+                f"{self.sequence_root}"
             )
 
+        print(
+            f"Loaded "
+            f"{len(self.samples)} sequences "
+            f"from "
+            f"{len(self.class_to_idx)} classes."
+        )
+
     def __len__(self):
+
         return len(self.samples)
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self,
+        idx
+    ):
 
-        sequence_file, label = self.samples[idx]
+        sequence_file, label = (
+            self.samples[idx]
+        )
 
-        # Read frame paths
         with open(
             sequence_file,
             "r",
@@ -113,43 +163,68 @@ class ActionSequenceDataset(Dataset):
         ) as f:
 
             frame_paths = [
+
                 line.strip()
+
                 for line in f.readlines()
+
                 if line.strip()
+
             ]
 
         frames = []
 
         for frame_path in frame_paths:
 
-            frame_path = Path(frame_path)
+            frame_path = Path(
+                frame_path
+            )
 
             if not frame_path.exists():
+
                 raise FileNotFoundError(
-                    f"Frame not found: {frame_path}"
+                    f"Frame not found:\n"
+                    f"{frame_path}"
                 )
 
             image = Image.open(
                 frame_path
             ).convert("RGB")
 
-            image = self.transform(image)
+            image = self.transform(
+                image
+            )
 
-            frames.append(image)
+            frames.append(
+                image
+            )
 
-        # Shape:
-        # (T, C, H, W)
-        frames = torch.stack(frames)
+        frames = torch.stack(
+            frames
+        )
 
         label = torch.tensor(
             label,
             dtype=torch.long
         )
 
-        return frames, label
+        return (
+            frames,
+            label
+        )
 
-    def get_num_classes(self):
-        return len(self.class_to_idx)
+    def get_num_classes(
+        self
+    ):
 
-    def get_class_names(self):
-        return list(self.class_to_idx.keys())
+        return len(
+            self.class_to_idx
+        )
+
+    def get_class_names(
+        self
+    ):
+
+        return list(
+            self.class_to_idx.keys()
+        )
