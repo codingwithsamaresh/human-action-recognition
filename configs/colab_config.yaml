@@ -11,17 +11,17 @@ seed: 42
 # ==================================================
 
 dataset:
-  raw_dir: "/content/drive/MyDrive/human_action_recognition/datasets/raw/UCF101/UCF-101"
+  raw_dir: "/content/har_dataset/raw/UCF101"
 
-  processed_frames_dir: "/content/drive/MyDrive/human_action_recognition/datasets/processed/frames"
+  processed_frames_dir: "/content/har_dataset/processed/frames"
 
-  processed_sequences_dir: "/content/drive/MyDrive/human_action_recognition/datasets/processed/sequences"
+  processed_sequences_dir: "/content/har_dataset/processed/sequences"
 
-  train_dir: "/content/drive/MyDrive/human_action_recognition/datasets/train"
+  train_dir: "/content/har_dataset/train"
 
-  val_dir: "/content/drive/MyDrive/human_action_recognition/datasets/val"
+  val_dir: "/content/har_dataset/val"
 
-  test_dir: "/content/drive/MyDrive/human_action_recognition/datasets/test"
+  test_dir: "/content/har_dataset/test"
 
   image_size: 224
   sequence_length: 8

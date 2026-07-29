@@ -214,8 +214,12 @@ class Evaluator:
 def main():
 
     evaluator = Evaluator(
-        checkpoint_path=
-        "weights/checkpoints/best_model.pth",
+        checkpoint_path = (
+    "/content/drive/MyDrive/"
+    "human_action_recognition/"
+    "weights/checkpoints/"
+    "best_model.pth"
+),
 
         test_dir=
         "data/test"

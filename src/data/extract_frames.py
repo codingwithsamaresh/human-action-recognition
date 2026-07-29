@@ -57,6 +57,11 @@ class FrameExtractor:
             parents=True,
             exist_ok=True
         )
+        existing_frames = list(save_dir.glob("*.jpg"))
+
+        if existing_frames:
+            logger.info(f"Skipping {video_name}")
+            return
 
         cap = cv2.VideoCapture(str(video_path))
 
@@ -81,6 +86,11 @@ class FrameExtractor:
                 frame_file = (
                     save_dir /
                     f"frame_{saved_count:06d}.jpg"
+                )
+                frame = cv2.resize(
+                    frame,
+                    (224, 224),
+                    interpolation=cv2.INTER_AREA
                 )
 
                 cv2.imwrite(
@@ -144,7 +154,7 @@ if __name__ == "__main__":
     extractor = FrameExtractor(
         input_dir=config.dataset.raw_dir,
         output_dir=config.dataset.processed_frames_dir,
-        sample_rate=5
+        sample_rate=3
     )
 
     extractor.run()
