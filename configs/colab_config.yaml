@@ -36,7 +36,7 @@ dataset:
 training:
   batch_size: 8
 
-  epochs: 20
+  epochs: 1
 
   learning_rate: 0.001
 
@@ -66,8 +66,7 @@ model:
 # ==================================================
 
 checkpoint:
-  save_dir: "weights/checkpoints"
-
+  save_dir: "/content/drive/MyDrive/human_action_recognition/checkpoints/cnn_lstm"
   save_best_only: true
 
 # ==================================================
