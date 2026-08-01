@@ -263,10 +263,10 @@ class ActionSequenceDataset(Dataset):
         return self.idx_to_class
 
     def get_class_indices(self):
-    """
-    Returns a dictionary:
-    class_index -> list of dataset indices
-    """
+        """
+        Returns a dictionary:
+        class_index -> list of dataset indices
+        """
 
         class_indices = {
             idx: []
