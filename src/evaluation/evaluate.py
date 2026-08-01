@@ -1,12 +1,13 @@
 """
 Evaluation Script
 
-Evaluates a trained HAR model on the
-test dataset and reports:
+Evaluates a trained CNN-LSTM model on the
+test dataset.
 
-- Loss
+Reports:
+- Test Loss
 - Top-1 Accuracy
-- Top-K Accuracy
+- Top-5 Accuracy
 - Precision
 - Recall
 - F1 Score
@@ -18,11 +19,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.data.dataset import ActionSequenceDataset
+from src.data.augmentations import get_val_transforms
+
 from src.models.cnn_lstm_baseline import CNNLSTMBaseline
 
-from src.training.losses import (
-    get_cross_entropy_loss
-)
+from src.training.losses import get_cross_entropy_loss
 
 from src.training.metrics import (
     top1_accuracy,
@@ -31,212 +32,243 @@ from src.training.metrics import (
 )
 
 from src.utils.device import get_device
+from src.utils.config_loader import ConfigLoader
 
 
 class Evaluator:
 
-    def __init__(
-        self,
-        checkpoint_path,
-        test_dir,
-        batch_size=8,
-        image_size=224
-    ):
+    def __init__(self):
+
+        self.config = ConfigLoader.load(
+            "configs/colab_config.yaml"
+        )
 
         self.device = get_device()
 
-        # -------------------------
+        print(f"\nUsing Device: {self.device}")
+
+        # ------------------------------------------
         # Dataset
-        # -------------------------
+        # ------------------------------------------
+
+        print("\nLoading test dataset...")
 
         self.dataset = ActionSequenceDataset(
-            sequence_root=test_dir,
-            image_size=image_size
+
+            sequence_root=self.config.dataset.test_dir,
+
+            transform=get_val_transforms()
+
         )
 
         self.dataloader = DataLoader(
+
             self.dataset,
-            batch_size=batch_size,
+
+            batch_size=self.config.training.batch_size,
+
             shuffle=False,
-            num_workers=0
+
+            num_workers=self.config.dataset.num_workers,
+
+            pin_memory=torch.cuda.is_available()
+
         )
 
-        # -------------------------
+        # ------------------------------------------
         # Model
-        # -------------------------
+        # ------------------------------------------
+
+        print("Creating model...")
 
         self.model = CNNLSTMBaseline(
+
             num_classes=self.dataset.get_num_classes(),
-            pretrained=False
+
+            hidden_size=self.config.model.hidden_size,
+
+            num_layers=self.config.model.num_layers,
+
+            dropout=self.config.model.dropout
+
         )
 
-        self._load_checkpoint(
-            checkpoint_path
-        )
+        self.model.to(self.device)
 
-        # -------------------------
-        # Loss
-        # -------------------------
+        self.load_checkpoint()
 
-        self.criterion = (
-            get_cross_entropy_loss()
-        )
+        self.criterion = get_cross_entropy_loss()
 
-    def _load_checkpoint(
-        self,
-        checkpoint_path
-    ):
+    # ==================================================
+    # Load Checkpoint
+    # ==================================================
+
+    def load_checkpoint(self):
 
         checkpoint_path = Path(
-            checkpoint_path
-        )
+
+            self.config.checkpoint.save_dir
+
+        ) / "best_model.pth"
 
         if not checkpoint_path.exists():
 
             raise FileNotFoundError(
-                f"Checkpoint not found: "
+
+                f"Checkpoint not found:\n"
+
                 f"{checkpoint_path}"
+
             )
 
         checkpoint = torch.load(
+
             checkpoint_path,
+
             map_location=self.device
+
         )
 
-        # Training checkpoint format
+        self.model.load_state_dict(
 
-        if (
-            isinstance(checkpoint, dict)
-            and "model_state_dict" in checkpoint
-        ):
+            checkpoint["model_state_dict"]
 
-            self.model.load_state_dict(
-                checkpoint["model_state_dict"]
-            )
-
-        else:
-
-            self.model.load_state_dict(
-                checkpoint
-            )
-
-        self.model.to(
-            self.device
         )
 
         self.model.eval()
 
         print(
-            f"Loaded checkpoint from: "
+
+            f"Loaded checkpoint:\n"
+
             f"{checkpoint_path}"
+
         )
+
+    # ==================================================
+    # Evaluation
+    # ==================================================
 
     @torch.no_grad()
+
     def evaluate(self):
 
-        total_loss = 0.0
+        self.model.eval()
 
-        all_logits = []
-        all_targets = []
+        running_loss = 0.0
 
-        for frames, targets in self.dataloader:
+        all_outputs = []
 
-            frames = frames.to(
-                self.device
-            )
+        all_labels = []
 
-            targets = targets.to(
-                self.device
-            )
+        for frames, labels in self.dataloader:
 
-            logits = self.model(
-                frames
-            )
+            frames = frames.to(self.device)
+
+            labels = labels.to(self.device)
+
+            outputs = self.model(frames)
 
             loss = self.criterion(
-                logits,
-                targets
+
+                outputs,
+
+                labels
+
             )
 
-            total_loss += loss.item()
+            running_loss += loss.item()
 
-            all_logits.append(
-                logits.cpu()
+            all_outputs.append(
+
+                outputs.cpu()
+
             )
 
-            all_targets.append(
-                targets.cpu()
+            all_labels.append(
+
+                labels.cpu()
+
             )
 
-        all_logits = torch.cat(
-            all_logits,
+        outputs = torch.cat(
+
+            all_outputs,
+
             dim=0
+
         )
 
-        all_targets = torch.cat(
-            all_targets,
+        labels = torch.cat(
+
+            all_labels,
+
             dim=0
+
         )
 
         avg_loss = (
-            total_loss /
+
+            running_loss /
+
             len(self.dataloader)
+
         )
 
         top1 = top1_accuracy(
-            all_logits,
-            all_targets
+
+            outputs,
+
+            labels
+
         )
 
         top5 = topk_accuracy(
-            all_logits,
-            all_targets,
-            k=5
+
+            outputs,
+
+            labels,
+
+            k=self.config.evaluation.top_k
+
         )
 
-        prf = precision_recall_f1(
-            all_logits,
-            all_targets
+        metrics = precision_recall_f1(
+
+            outputs,
+
+            labels
+
         )
 
-        results = {
-            "loss": avg_loss,
-            "top1_accuracy": top1,
-            "top5_accuracy": top5,
-            "precision": prf["precision"],
-            "recall": prf["recall"],
-            "f1": prf["f1"]
-        }
+        print("\n========================================")
 
-        return results
+        print("Evaluation Results")
+
+        print("========================================")
+
+        print(f"Loss          : {avg_loss:.4f}")
+
+        print(f"Top-1 Acc     : {top1:.4f}")
+
+        print(f"Top-5 Acc     : {top5:.4f}")
+
+        print(f"Precision     : {metrics['precision']:.4f}")
+
+        print(f"Recall        : {metrics['recall']:.4f}")
+
+        print(f"F1 Score      : {metrics['f1']:.4f}")
+
+        print("========================================")
 
 
 def main():
 
-    evaluator = Evaluator(
-        checkpoint_path = (
-    "/content/drive/MyDrive/"
-    "human_action_recognition/"
-    "weights/checkpoints/"
-    "best_model.pth"
-),
+    evaluator = Evaluator()
 
-        test_dir=
-        "data/test"
-    )
-
-    results = evaluator.evaluate()
-
-    print("\nEvaluation Results")
-    print("-" * 40)
-
-    for key, value in results.items():
-
-        print(
-            f"{key}: "
-            f"{value:.4f}"
-        )
+    evaluator.evaluate()
 
 
 if __name__ == "__main__":
+
     main()

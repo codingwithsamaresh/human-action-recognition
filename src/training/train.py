@@ -4,729 +4,585 @@ Main Training Script
 Trains the CNN-LSTM baseline model
 using train/validation splits.
 
-Optimized for Google Colab / NVIDIA T4:
+Optimized for Google Colab / NVIDIA T4
 
-* Mixed precision
-* Persistent DataLoader workers
-* Pinned memory
-* Non-blocking transfers
-* Optional balanced subset per epoch
-* Checkpoint resume
-  """
+Features
+--------
+- Mixed Precision (AMP)
+- Resume Training
+- Balanced Subset Sampling
+- Persistent Workers
+- Fast DataLoader
+- Automatic Checkpointing
+"""
 
 import random
 
 import torch
 
 from torch.utils.data import (
-DataLoader
+    DataLoader,
+    SubsetRandomSampler
 )
 
 from src.data.dataset import (
-ActionSequenceDataset
+    ActionSequenceDataset
 )
 
 from src.data.augmentations import (
-get_train_transforms,
-get_val_transforms
+    get_train_transforms,
+    get_val_transforms
 )
 
 from src.models.cnn_lstm_baseline import (
-CNNLSTMBaseline
+    CNNLSTMBaseline
 )
 
 from src.training.losses import (
-get_cross_entropy_loss
+    get_cross_entropy_loss
 )
 
 from src.training.trainer import (
-Trainer
+    Trainer
 )
 
 from src.utils.device import (
-get_device
+    get_device
 )
 
 from src.utils.config_loader import (
-ConfigLoader
+    ConfigLoader
 )
+
+
+# ==================================================
+# Reproducibility
+# ==================================================
 
 def set_seed(seed):
 
-```
-random.seed(seed)
+    random.seed(seed)
 
-torch.manual_seed(seed)
+    torch.manual_seed(seed)
 
-if torch.cuda.is_available():
+    if torch.cuda.is_available():
 
-    torch.cuda.manual_seed_all(
-        seed
-    )
-```
+        torch.cuda.manual_seed_all(seed)
+
+
+# ==================================================
+# Balanced Sampler
+# ==================================================
 
 def create_balanced_sampler(
-dataset,
-samples_per_epoch
+    dataset,
+    samples_per_epoch
 ):
-"""
-Creates a balanced sampler across
-all classes.
+    """
+    Creates a balanced subset of samples.
 
-```
-Every class receives approximately
-the same number of samples per epoch.
+    Every class contributes approximately
+    the same number of samples.
+    """
 
-Sampling is with replacement, allowing
-us to reduce the number of samples
-processed in each epoch without
-dropping any of the 101 classes.
-"""
+    class_indices = dataset.get_class_indices()
 
-class_indices = (
-    dataset.get_class_indices()
-)
+    num_classes = dataset.get_num_classes()
 
-num_classes = (
-    dataset.get_num_classes()
-)
+    if samples_per_epoch <= 0:
 
-if samples_per_epoch <= 0:
+        raise ValueError(
+            "samples_per_epoch must be positive."
+        )
 
-    raise ValueError(
-        "samples_per_epoch must "
-        "be greater than zero."
-    )
+    base = samples_per_epoch // num_classes
 
-# --------------------------------------------------
-# Equal target count per class
-# --------------------------------------------------
+    remainder = samples_per_epoch % num_classes
 
-base_count = (
-    samples_per_epoch //
-    num_classes
-)
+    sampled_indices = []
 
-remainder = (
-    samples_per_epoch %
-    num_classes
-)
+    for class_idx in range(num_classes):
 
-target_counts = []
+        indices = class_indices[class_idx]
 
-for class_index in range(
-    num_classes
-):
+        if len(indices) == 0:
+            continue
 
-    count = base_count
+        count = base
 
-    if class_index < remainder:
+        if class_idx < remainder:
+            count += 1
 
-        count += 1
+        selected = torch.randint(
+            low=0,
+            high=len(indices),
+            size=(count,)
+        ).tolist()
 
-    target_counts.append(
-        count
-    )
+        sampled_indices.extend(
+            indices[i]
+            for i in selected
+        )
 
-# --------------------------------------------------
-# Build sampled indices
-# --------------------------------------------------
+    random.shuffle(sampled_indices)
 
-sampled_indices = []
+    return sampled_indices
 
-for class_index in range(
-    num_classes
-):
 
-    indices = class_indices[
-        class_index
-    ]
-
-    if not indices:
-
-        continue
-
-    count = target_counts[
-        class_index
-    ]
-
-    selected = torch.randint(
-        low=0,
-        high=len(indices),
-        size=(count,)
-    ).tolist()
-
-    sampled_indices.extend(
-        indices[index]
-        for index in selected
-    )
-
-# --------------------------------------------------
-# Shuffle sampled indices
-# --------------------------------------------------
-
-random.shuffle(
-    sampled_indices
-)
-
-# --------------------------------------------------
-# Convert to weights
-#
-# WeightedRandomSampler is not necessary
-# here because we already constructed a
-# balanced index list.
-# --------------------------------------------------
-
-return sampled_indices
-```
+# ==================================================
+# Main
+# ==================================================
 
 def main():
 
-```
-# ==================================================
-# Configuration
-# ==================================================
-
-config = ConfigLoader.load(
-    "configs/colab_config.yaml"
-)
-
-seed = getattr(
-    config,
-    "seed",
-    42
-)
-
-set_seed(seed)
-
-# ==================================================
-# Device
-# ==================================================
-
-device = get_device()
-
-print(
-    "\n========================================"
-)
-
-print(
-    f"Using Device: {device}"
-)
-
-if torch.cuda.is_available():
-
-    print(
-        f"GPU: "
-        f"{torch.cuda.get_device_name(0)}"
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
     )
 
-    print(
-        f"CUDA Version: "
-        f"{torch.version.cuda}"
+    set_seed(
+        getattr(config, "seed", 42)
     )
 
-print(
-    "========================================\n"
-)
+    device = get_device()
 
-# ==================================================
-# Dataset
-# ==================================================
+    print("\n========================================")
+    print(f"Using Device: {device}")
 
-print(
-    "Loading training dataset..."
-)
+    if torch.cuda.is_available():
 
-train_dataset = (
-    ActionSequenceDataset(
-        sequence_root=
-        config.dataset.train_dir,
+        print(
+            f"GPU: {torch.cuda.get_device_name(0)}"
+        )
 
-        transform=
-        get_train_transforms()
-    )
-)
+        print(
+            f"CUDA Version: {torch.version.cuda}"
+        )
 
-print(
-    "Loading validation dataset..."
-)
+    print("========================================\n")
 
-val_dataset = (
-    ActionSequenceDataset(
-        sequence_root=
-        config.dataset.val_dir,
+        # ==================================================
+    # Dataset
+    # ==================================================
 
-        transform=
-        get_val_transforms()
-    )
-)
+    print("Loading training dataset...")
 
-# ==================================================
-# Dataset Statistics
-# ==================================================
-
-train_samples = len(
-    train_dataset
-)
-
-val_samples = len(
-    val_dataset
-)
-
-class_names = (
-    train_dataset
-    .get_class_names()
-)
-
-num_classes = (
-    train_dataset
-    .get_num_classes()
-)
-
-print(
-    "\n========================================"
-)
-
-print(
-    f"Train Samples     : "
-    f"{train_samples}"
-)
-
-print(
-    f"Validation Samples: "
-    f"{val_samples}"
-)
-
-print(
-    f"Number of Classes : "
-    f"{num_classes}"
-)
-
-print(
-    "========================================"
-)
-
-# ==================================================
-# Verify Classes
-# ==================================================
-
-val_class_names = (
-    val_dataset
-    .get_class_names()
-)
-
-if class_names != val_class_names:
-
-    raise RuntimeError(
-        "Train and validation datasets "
-        "do not contain the same classes."
+    train_dataset = ActionSequenceDataset(
+        sequence_root=config.dataset.train_dir,
+        transform=get_train_transforms()
     )
 
-print(
-    "\nDataset classes verified."
-)
+    print("Loading validation dataset...")
 
-# ==================================================
-# Training Sample Count
-# ==================================================
+    val_dataset = ActionSequenceDataset(
+        sequence_root=config.dataset.val_dir,
+        transform=get_val_transforms()
+    )
 
-samples_per_epoch = getattr(
-    config.training,
-    "samples_per_epoch",
-    train_samples
-)
+    # ==================================================
+    # Dataset Statistics
+    # ==================================================
 
-if samples_per_epoch > train_samples:
+    train_samples = len(train_dataset)
+    val_samples = len(val_dataset)
 
-    samples_per_epoch = (
+    num_classes = train_dataset.get_num_classes()
+
+    class_names = train_dataset.get_class_names()
+
+    print("\n========================================")
+
+    print(f"Train Samples     : {train_samples}")
+
+    print(f"Validation Samples: {val_samples}")
+
+    print(f"Number of Classes : {num_classes}")
+
+    print("========================================")
+
+    if class_names != val_dataset.get_class_names():
+
+        raise RuntimeError(
+            "Train and validation classes do not match."
+        )
+
+    print("\nDataset classes verified.")
+
+    # ==================================================
+    # Samples Per Epoch
+    # ==================================================
+
+    samples_per_epoch = getattr(
+        config.training,
+        "samples_per_epoch",
         train_samples
     )
 
-print(
-    "\nTraining samples per epoch:"
-)
+    if samples_per_epoch > train_samples:
 
-print(
-    samples_per_epoch
-)
+        samples_per_epoch = train_samples
 
-# ==================================================
-# Build Balanced Sample List
-# ==================================================
+    print("\nTraining samples per epoch:")
 
-if samples_per_epoch < train_samples:
+    print(samples_per_epoch)
 
-    print(
-        "\nUsing balanced subset sampling."
-    )
+    # ==================================================
+    # Balanced Sampling
+    # ==================================================
 
-    sampled_indices = (
-        create_balanced_sampler(
+    if samples_per_epoch < train_samples:
+
+        print("\nUsing balanced subset sampling.")
+
+        sampled_indices = create_balanced_sampler(
             train_dataset,
             samples_per_epoch
         )
-    )
 
-    train_sampler = (
-        torch.utils.data.SubsetRandomSampler(
+        train_sampler = SubsetRandomSampler(
             sampled_indices
         )
+
+        shuffle = False
+
+    else:
+
+        print("\nUsing complete training dataset.")
+
+        train_sampler = None
+
+        shuffle = True
+
+    # ==================================================
+    # DataLoaders
+    # ==================================================
+
+    batch_size = config.training.batch_size
+
+    num_workers = config.dataset.num_workers
+
+    pin_memory = torch.cuda.is_available()
+
+    print("\nCreating DataLoaders...")
+
+    train_loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+
+    if train_sampler is not None:
+        train_loader_kwargs["sampler"] = train_sampler
+
+    if num_workers > 0:
+
+        train_loader_kwargs[
+            "persistent_workers"
+        ] = True
+
+        train_loader_kwargs[
+            "prefetch_factor"
+        ] = 2
+
+    train_loader = DataLoader(
+        train_dataset,
+        **train_loader_kwargs
     )
 
-    train_shuffle = False
+    val_loader_kwargs = {
 
-else:
+        "batch_size": batch_size,
+
+        "shuffle": False,
+
+        "num_workers": num_workers,
+
+        "pin_memory": pin_memory
+
+    }
+
+    if num_workers > 0:
+
+        val_loader_kwargs[
+            "persistent_workers"
+        ] = True
+
+        val_loader_kwargs[
+            "prefetch_factor"
+        ] = 2
+
+    val_loader = DataLoader(
+        val_dataset,
+        **val_loader_kwargs
+    )
 
     print(
-        "\nUsing the complete training dataset."
+        f"Train batches: {len(train_loader)}"
     )
 
-    train_sampler = None
-    train_shuffle = True
-
-# ==================================================
-# DataLoaders
-# ==================================================
-
-batch_size = (
-    config.training.batch_size
-)
-
-num_workers = (
-    config.dataset.num_workers
-)
-
-pin_memory = (
-    torch.cuda.is_available()
-)
-
-print(
-    "\nCreating DataLoaders..."
-)
-
-train_loader = DataLoader(
-
-    train_dataset,
-
-    batch_size=batch_size,
-
-    shuffle=train_shuffle,
-
-    sampler=train_sampler,
-
-    num_workers=num_workers,
-
-    pin_memory=pin_memory,
-
-    persistent_workers=(
-        num_workers > 0
-    ),
-
-    prefetch_factor=(
-        2
-        if num_workers > 0
-        else None
-    )
-)
-
-val_loader = DataLoader(
-
-    val_dataset,
-
-    batch_size=batch_size,
-
-    shuffle=False,
-
-    num_workers=num_workers,
-
-    pin_memory=pin_memory,
-
-    persistent_workers=(
-        num_workers > 0
-    ),
-
-    prefetch_factor=(
-        2
-        if num_workers > 0
-        else None
-    )
-)
-
-print(
-    f"Train batches: "
-    f"{len(train_loader)}"
-)
-
-print(
-    f"Val batches: "
-    f"{len(val_loader)}"
-)
-
-# ==================================================
-# Model
-# ==================================================
-
-print(
-    "\nCreating CNN-LSTM model..."
-)
-
-model = CNNLSTMBaseline(
-
-    num_classes=num_classes,
-
-    hidden_size=
-    config.model.hidden_size,
-
-    num_layers=
-    config.model.num_layers,
-
-    dropout=
-    config.model.dropout
-)
-
-model = model.to(
-    device
-)
-
-print(
-    "Model loaded successfully."
-)
-
-# ==================================================
-# Loss
-# ==================================================
-
-criterion = (
-    get_cross_entropy_loss()
-)
-
-# ==================================================
-# Optimizer
-# ==================================================
-
-optimizer_name = (
-    config.training.optimizer
-    .lower()
-)
-
-if optimizer_name == "adam":
-
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-
-        lr=
-        config.training.learning_rate,
-
-        weight_decay=
-        config.training.weight_decay
+    print(
+        f"Val batches: {len(val_loader)}"
     )
 
-elif optimizer_name == "adamw":
+        # ==================================================
+    # Model
+    # ==================================================
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
+    print("\nCreating CNN-LSTM model...")
 
-        lr=
-        config.training.learning_rate,
+    model = CNNLSTMBaseline(
 
-        weight_decay=
-        config.training.weight_decay
+        num_classes=num_classes,
+
+        hidden_size=config.model.hidden_size,
+
+        num_layers=config.model.num_layers,
+
+        dropout=config.model.dropout
+
     )
 
-else:
+    model = model.to(device)
 
-    raise ValueError(
-        f"Unsupported optimizer: "
-        f"{optimizer_name}"
+    print("Model loaded successfully.")
+
+    # ==================================================
+    # Loss Function
+    # ==================================================
+
+    criterion = get_cross_entropy_loss()
+
+    # ==================================================
+    # Optimizer
+    # ==================================================
+
+    optimizer_name = (
+        config.training.optimizer.lower()
     )
 
-# ==================================================
-# Scheduler
-# ==================================================
+    if optimizer_name == "adam":
 
-scheduler = None
+        optimizer = torch.optim.Adam(
 
-scheduler_name = (
-    config.training.scheduler
-    .lower()
-)
+            model.parameters(),
 
-epochs = (
-    config.training.epochs
-)
+            lr=config.training.learning_rate,
 
-if scheduler_name == "cosine":
+            weight_decay=config.training.weight_decay
 
-    scheduler = (
-        torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=epochs
         )
+
+    elif optimizer_name == "adamw":
+
+        optimizer = torch.optim.AdamW(
+
+            model.parameters(),
+
+            lr=config.training.learning_rate,
+
+            weight_decay=config.training.weight_decay
+
+        )
+
+    else:
+
+        raise ValueError(
+            f"Unsupported optimizer: {optimizer_name}"
+        )
+
+    # ==================================================
+    # Scheduler
+    # ==================================================
+
+    scheduler = None
+
+    scheduler_name = (
+        config.training.scheduler.lower()
     )
 
-    print(
-        "\nUsing CosineAnnealingLR scheduler."
-    )
+    epochs = config.training.epochs
 
-elif scheduler_name in (
-    "none",
-    ""
-):
+    if scheduler_name == "cosine":
 
-    print(
-        "\nLearning-rate scheduler disabled."
-    )
+        scheduler = (
+            torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=epochs
+            )
+        )
 
-else:
+        print(
+            "\nUsing CosineAnnealingLR scheduler."
+        )
 
-    raise ValueError(
-        f"Unsupported scheduler: "
-        f"{scheduler_name}"
-    )
-
-# ==================================================
-# Checkpoint Directory
-# ==================================================
-
-checkpoint_dir = (
-    config.checkpoint.save_dir
-)
-
-print(
-    "\nCheckpoint directory:"
-)
-
-print(
-    checkpoint_dir
-)
-
-# ==================================================
-# AMP
-# ==================================================
-
-use_amp = getattr(
-    config.training,
-    "mixed_precision",
-    True
-)
-
-# ==================================================
-# Resume
-# ==================================================
-
-resume_checkpoint = getattr(
-    config.training,
-    "resume_checkpoint",
-    None
-)
-
-if (
-    resume_checkpoint
-    in (
-        "",
+    elif scheduler_name in (
         "none",
-        "None"
+        ""
+    ):
+
+        print(
+            "\nLearning-rate scheduler disabled."
+        )
+
+    else:
+
+        raise ValueError(
+            f"Unsupported scheduler: {scheduler_name}"
+        )
+
+    # ==================================================
+    # Mixed Precision
+    # ==================================================
+
+    mixed_precision = getattr(
+        config.training,
+        "mixed_precision",
+        True
     )
-):
 
-    resume_checkpoint = None
+    if (
+        mixed_precision
+        and
+        torch.cuda.is_available()
+    ):
 
-if resume_checkpoint is not None:
+        print(
+            "\nMixed Precision: ENABLED"
+        )
+
+    else:
+
+        mixed_precision = False
+
+        print(
+            "\nMixed Precision: DISABLED"
+        )
+
+    # ==================================================
+    # Resume Checkpoint
+    # ==================================================
+
+    resume_checkpoint = getattr(
+        config.training,
+        "resume_checkpoint",
+        None
+    )
+
+    if resume_checkpoint in (
+        "",
+        "None",
+        "none"
+    ):
+
+        resume_checkpoint = None
+
+    # ==================================================
+    # Checkpoint Directory
+    # ==================================================
+
+    checkpoint_dir = (
+        config.checkpoint.save_dir
+    )
 
     print(
-        "\nResume checkpoint:"
+        "\nCheckpoint directory:"
     )
 
     print(
-        resume_checkpoint
+        checkpoint_dir
     )
 
+    # ==================================================
+    # Trainer
+    # ==================================================
+
+    trainer = Trainer(
+
+        model=model,
+
+        criterion=criterion,
+
+        optimizer=optimizer,
+
+        scheduler=scheduler,
+
+        device=device,
+
+        checkpoint_dir=checkpoint_dir,
+
+        mixed_precision=mixed_precision,
+
+        resume_checkpoint=resume_checkpoint,
+
+        samples_per_epoch=samples_per_epoch
+
+    )
+
+    # ==================================================
+    # Training
+    # ==================================================
+
+    print(
+        "\n========================================"
+    )
+
+    print(
+        f"Starting Training for {epochs} epochs"
+    )
+
+    print(
+        "========================================\n"
+    )
+
+    trainer.fit(
+
+        train_loader=train_loader,
+
+        val_loader=val_loader,
+
+        epochs=epochs
+
+    )
+
+    # ==================================================
+    # Completion
+    # ==================================================
+
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "Training Complete."
+    )
+
+    print(
+        "\nBest checkpoint:"
+    )
+
+    print(
+        f"{checkpoint_dir}/best_model.pth"
+    )
+
+    print(
+        "\nLast checkpoint:"
+    )
+
+    print(
+        f"{checkpoint_dir}/last_model.pth"
+    )
+
+    print(
+        "========================================\n"
+    )
+
+
 # ==================================================
-# Trainer
+# Entry Point
 # ==================================================
 
-trainer = Trainer(
+if __name__ == "__main__":
 
-    model=model,
+    main()
 
-    criterion=criterion,
-
-    optimizer=optimizer,
-
-    scheduler=scheduler,
-
-    device=device,
-
-    checkpoint_dir=
-    checkpoint_dir,
-
-    use_amp=use_amp
-)
-
-# ==================================================
-# Training
-# ==================================================
-
-print(
-    "\n========================================"
-)
-
-print(
-    f"Starting Training "
-    f"for {epochs} epochs"
-)
-
-print(
-    "========================================\n"
-)
-
-trainer.fit(
-
-    train_loader=train_loader,
-
-    val_loader=val_loader,
-
-    epochs=epochs,
-
-    resume_checkpoint=
-    resume_checkpoint
-)
-
-# ==================================================
-# Completion
-# ==================================================
-
-print(
-    "\n========================================"
-)
-
-print(
-    "Training Complete."
-)
-
-print(
-    "Best checkpoint:"
-)
-
-print(
-    f"{checkpoint_dir}/best_model.pth"
-)
-
-print(
-    "\nLast checkpoint:"
-)
-
-print(
-    f"{checkpoint_dir}/last_model.pth"
-)
-
-print(
-    "========================================\n"
-)
-```
-
-if **name** == "**main**":
-
-```
-main()
-```
+    

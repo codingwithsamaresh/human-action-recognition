@@ -6,278 +6,194 @@ from tqdm import tqdm
 from src.training.metrics import top1_accuracy
 from src.utils.logger import get_logger
 
+
 class Trainer:
-"""
-Training and validation manager for HAR models.
+    """
+    Trainer for CNN-LSTM Human Action Recognition.
 
-```
-Features:
-- Mixed precision training on CUDA
-- Non-blocking GPU transfers
-- Learning-rate scheduling
-- Best-model checkpointing
-- Last-model checkpointing
-- Resume-from-checkpoint support
-- Interrupted-training checkpointing
-"""
+    Features
+    --------
+    • Mixed Precision (AMP)
+    • Resume Training
+    • Automatic Checkpoints
+    • Best Model Saving
+    • Last Model Saving
+    • Interrupted Training Recovery
+    • Learning Rate Scheduler
+    """
 
-def __init__(
-    self,
-    model,
-    criterion,
-    optimizer,
-    device,
-    checkpoint_dir="weights/checkpoints",
-    scheduler=None,
-    use_amp=True
-):
+    def __init__(
+        self,
+        model,
+        criterion,
+        optimizer,
+        device,
+        checkpoint_dir="weights/checkpoints",
+        scheduler=None,
+        mixed_precision=True,
+        resume_checkpoint=None,
+        samples_per_epoch=None
+    ):
 
-    self.model = model
-    self.criterion = criterion
-    self.optimizer = optimizer
-    self.device = device
-    self.scheduler = scheduler
+        self.model = model
+        self.criterion = criterion
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.device = device
 
-    self.logger = get_logger(
-        "trainer"
-    )
+        self.logger = get_logger("trainer")
 
-    self.checkpoint_dir = Path(
-        checkpoint_dir
-    )
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir.mkdir(
+            parents=True,
+            exist_ok=True
+        )
 
-    self.checkpoint_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+        self.best_val_loss = float("inf")
+        self.start_epoch = 0
 
-    self.best_val_loss = float(
-        "inf"
-    )
+        self.samples_per_epoch = samples_per_epoch
+
+        # ----------------------------------
+        # Automatic Mixed Precision
+        # ----------------------------------
+
+        self.use_amp = (
+            mixed_precision
+            and torch.cuda.is_available()
+        )
+
+        self.scaler = torch.cuda.amp.GradScaler(
+            enabled=self.use_amp
+        )
+
+        # ----------------------------------
+        # Resume Training
+        # ----------------------------------
+
+        if resume_checkpoint is not None:
+
+            self.load_checkpoint(
+                resume_checkpoint
+            )
 
     # ==================================================
-    # AMP
+    # Load Checkpoint
     # ==================================================
 
-    self.use_amp = (
-        use_amp
-        and
-        self.device.type == "cuda"
-    )
+    def load_checkpoint(
+        self,
+        checkpoint_path
+    ):
 
-    if self.use_amp:
+        checkpoint_path = Path(checkpoint_path)
 
-        self.scaler = torch.amp.GradScaler(
-            "cuda"
+        if not checkpoint_path.exists():
+
+            raise FileNotFoundError(
+                f"Checkpoint not found:\n"
+                f"{checkpoint_path}"
+            )
+
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=self.device
         )
 
-        self.logger.info(
-            "Automatic Mixed Precision enabled."
+        self.model.load_state_dict(
+            checkpoint["model_state_dict"]
         )
 
-    else:
-
-        self.scaler = None
-
-        self.logger.info(
-            "Automatic Mixed Precision disabled."
+        self.optimizer.load_state_dict(
+            checkpoint["optimizer_state_dict"]
         )
 
-# ==================================================
-# Forward Pass
-# ==================================================
-
-def _forward(
-    self,
-    frames,
-    labels
-):
-
-    if self.use_amp:
-
-        with torch.amp.autocast(
-            device_type="cuda",
-            dtype=torch.float16
+        if (
+            self.scheduler is not None
+            and
+            "scheduler_state_dict"
+            in checkpoint
         ):
 
-            outputs = self.model(
-                frames
+            self.scheduler.load_state_dict(
+                checkpoint[
+                    "scheduler_state_dict"
+                ]
             )
 
-            loss = self.criterion(
-                outputs,
-                labels
-            )
-
-    else:
-
-        outputs = self.model(
-            frames
+        self.start_epoch = (
+            checkpoint["epoch"]
         )
 
-        loss = self.criterion(
-            outputs,
-            labels
-        )
-
-    return (
-        outputs,
-        loss
-    )
-
-# ==================================================
-# Training
-# ==================================================
-
-def train_one_epoch(
-    self,
-    dataloader
-):
-
-    self.model.train()
-
-    running_loss = 0.0
-    running_correct = 0
-    running_samples = 0
-
-    progress_bar = tqdm(
-        dataloader,
-        desc="Training",
-        leave=False
-    )
-
-    for frames, labels in progress_bar:
-
-        frames = frames.to(
-            self.device,
-            non_blocking=True
-        )
-
-        labels = labels.to(
-            self.device,
-            non_blocking=True
-        )
-
-        self.optimizer.zero_grad(
-            set_to_none=True
-        )
-
-        outputs, loss = self._forward(
-            frames,
-            labels
-        )
-
-        # ==================================================
-        # Backward
-        # ==================================================
-
-        if self.use_amp:
-
-            self.scaler.scale(
-                loss
-            ).backward()
-
-            self.scaler.step(
-                self.optimizer
-            )
-
-            self.scaler.update()
-
-        else:
-
-            loss.backward()
-
-            self.optimizer.step()
-
-        # ==================================================
-        # Metrics
-        # ==================================================
-
-        predictions = (
-            outputs.argmax(
-                dim=1
+        self.best_val_loss = (
+            checkpoint.get(
+                "best_val_loss",
+                float("inf")
             )
         )
 
-        correct = (
-            predictions == labels
-        ).sum().item()
-
-        batch_size = (
-            labels.size(0)
+        self.logger.info(
+            f"Resumed from checkpoint: "
+            f"{checkpoint_path}"
         )
 
-        running_correct += correct
-        running_samples += batch_size
-        running_loss += (
-            loss.item() *
-            batch_size
+    # ==================================================
+    # Training
+    # ==================================================
+
+    def train_one_epoch(
+        self,
+        dataloader
+    ):
+
+        self.model.train()
+
+        running_loss = 0.0
+        running_acc = 0.0
+
+        total_samples = 0
+
+        progress_bar = tqdm(
+            dataloader,
+            desc="Training",
+            leave=False
         )
 
-        current_accuracy = (
-            correct /
-            batch_size
-        )
+        for frames, labels in progress_bar:
 
-        progress_bar.set_postfix(
-            loss=f"{loss.item():.4f}",
-            acc=f"{current_accuracy:.4f}"
-        )
+            # ------------------------------------------
+            # Stop early if samples_per_epoch reached
+            # ------------------------------------------
 
-    epoch_loss = (
-        running_loss /
-        running_samples
-    )
+            if (
+                self.samples_per_epoch is not None
+                and
+                total_samples >= self.samples_per_epoch
+            ):
+                break
 
-    epoch_accuracy = (
-        running_correct /
-        running_samples
-    )
+            frames = frames.to(
+                self.device,
+                non_blocking=True
+            )
 
-    return (
-        epoch_loss,
-        epoch_accuracy
-    )
+            labels = labels.to(
+                self.device,
+                non_blocking=True
+            )
 
-# ==================================================
-# Validation
-# ==================================================
+            batch_size = labels.size(0)
 
-@torch.no_grad()
-def validate(
-    self,
-    dataloader
-):
+            self.optimizer.zero_grad(
+                set_to_none=True
+            )
 
-    self.model.eval()
+            # ------------------------------------------
+            # Mixed Precision Forward Pass
+            # ------------------------------------------
 
-    running_loss = 0.0
-    running_correct = 0
-    running_samples = 0
-
-    progress_bar = tqdm(
-        dataloader,
-        desc="Validation",
-        leave=False
-    )
-
-    for frames, labels in progress_bar:
-
-        frames = frames.to(
-            self.device,
-            non_blocking=True
-        )
-
-        labels = labels.to(
-            self.device,
-            non_blocking=True
-        )
-
-        if self.use_amp:
-
-            with torch.amp.autocast(
-                device_type="cuda",
-                dtype=torch.float16
+            with torch.cuda.amp.autocast(
+                enabled=self.use_amp
             ):
 
                 outputs = self.model(
@@ -289,365 +205,370 @@ def validate(
                     labels
                 )
 
-        else:
+            # ------------------------------------------
+            # Backward
+            # ------------------------------------------
 
-            outputs = self.model(
-                frames
-            )
+            if self.use_amp:
 
-            loss = self.criterion(
+                self.scaler.scale(
+                    loss
+                ).backward()
+
+                self.scaler.step(
+                    self.optimizer
+                )
+
+                self.scaler.update()
+
+            else:
+
+                loss.backward()
+
+                self.optimizer.step()
+
+            # ------------------------------------------
+            # Metrics
+            # ------------------------------------------
+
+            acc = top1_accuracy(
                 outputs,
                 labels
             )
 
-        predictions = (
-            outputs.argmax(
-                dim=1
+            running_loss += loss.item()
+            running_acc += acc
+
+            total_samples += batch_size
+
+            progress_bar.set_postfix(
+                loss=f"{loss.item():.4f}",
+                acc=f"{acc:.4f}",
+                samples=total_samples
             )
+
+        num_batches = max(
+            1,
+            progress_bar.n
         )
 
-        correct = (
-            predictions == labels
-        ).sum().item()
-
-        batch_size = (
-            labels.size(0)
+        epoch_loss = (
+            running_loss /
+            num_batches
         )
 
-        running_correct += correct
-        running_samples += batch_size
-
-        running_loss += (
-            loss.item() *
-            batch_size
+        epoch_acc = (
+            running_acc /
+            num_batches
         )
 
-        progress_bar.set_postfix(
-            loss=f"{loss.item():.4f}"
+        return (
+            epoch_loss,
+            epoch_acc
         )
 
-    epoch_loss = (
-        running_loss /
-        running_samples
-    )
+        # ==================================================
+    # Validation
+    # ==================================================
 
-    epoch_accuracy = (
-        running_correct /
-        running_samples
-    )
+    @torch.no_grad()
+    def validate(
+        self,
+        dataloader
+    ):
 
-    return (
-        epoch_loss,
-        epoch_accuracy
-    )
+        self.model.eval()
 
-# ==================================================
-# Save Checkpoint
-# ==================================================
+        running_loss = 0.0
+        running_acc = 0.0
 
-def save_checkpoint(
-    self,
-    epoch,
-    val_loss,
-    filename="last_model.pth"
-):
+        progress_bar = tqdm(
+            dataloader,
+            desc="Validation",
+            leave=False
+        )
 
-    checkpoint_path = (
-        self.checkpoint_dir /
+        for frames, labels in progress_bar:
+
+            frames = frames.to(
+                self.device,
+                non_blocking=True
+            )
+
+            labels = labels.to(
+                self.device,
+                non_blocking=True
+            )
+
+            with torch.cuda.amp.autocast(
+                enabled=self.use_amp
+            ):
+
+                outputs = self.model(
+                    frames
+                )
+
+                loss = self.criterion(
+                    outputs,
+                    labels
+                )
+
+            acc = top1_accuracy(
+                outputs,
+                labels
+            )
+
+            running_loss += loss.item()
+            running_acc += acc
+
+            progress_bar.set_postfix(
+                loss=f"{loss.item():.4f}",
+                acc=f"{acc:.4f}"
+            )
+
+        num_batches = max(
+            1,
+            len(dataloader)
+        )
+
+        epoch_loss = (
+            running_loss /
+            num_batches
+        )
+
+        epoch_acc = (
+            running_acc /
+            num_batches
+        )
+
+        return (
+            epoch_loss,
+            epoch_acc
+        )
+
+    # ==================================================
+    # Save Checkpoint
+    # ==================================================
+
+    def save_checkpoint(
+        self,
+        epoch,
+        val_loss,
         filename
-    )
+    ):
 
-    checkpoint = {
-
-        "epoch":
-            epoch,
-
-        "model_state_dict":
-            self.model.state_dict(),
-
-        "optimizer_state_dict":
-            self.optimizer.state_dict(),
-
-        "val_loss":
-            val_loss,
-
-        "best_val_loss":
-            self.best_val_loss
-    }
-
-    if self.scheduler is not None:
-
-        checkpoint[
-            "scheduler_state_dict"
-        ] = (
-            self.scheduler.state_dict()
+        checkpoint_path = (
+            self.checkpoint_dir /
+            filename
         )
 
-    if self.scaler is not None:
+        checkpoint = {
 
-        checkpoint[
-            "scaler_state_dict"
-        ] = (
-            self.scaler.state_dict()
+            "epoch": epoch,
+
+            "model_state_dict":
+                self.model.state_dict(),
+
+            "optimizer_state_dict":
+                self.optimizer.state_dict(),
+
+            "best_val_loss":
+                self.best_val_loss,
+
+            "val_loss":
+                val_loss
+
+        }
+
+        if self.scheduler is not None:
+
+            checkpoint[
+                "scheduler_state_dict"
+            ] = self.scheduler.state_dict()
+
+        torch.save(
+            checkpoint,
+            checkpoint_path
         )
 
-    torch.save(
-        checkpoint,
-        checkpoint_path
-    )
-
-    self.logger.info(
-        f"Checkpoint saved: "
-        f"{checkpoint_path}"
-    )
-
-# ==================================================
-# Load Checkpoint
-# ==================================================
-
-def load_checkpoint(
-    self,
-    checkpoint_path
-):
-
-    checkpoint_path = Path(
-        checkpoint_path
-    )
-
-    if not checkpoint_path.exists():
-
-        raise FileNotFoundError(
-            f"Checkpoint not found: "
+        self.logger.info(
+            f"Checkpoint saved: "
             f"{checkpoint_path}"
         )
 
-    checkpoint = torch.load(
-        checkpoint_path,
-        map_location=self.device
-    )
+    # ==================================================
+    # Save Best Model
+    # ==================================================
 
-    self.model.load_state_dict(
-        checkpoint[
-            "model_state_dict"
-        ]
-    )
-
-    if (
-        "optimizer_state_dict"
-        in checkpoint
+    def save_best_checkpoint(
+        self,
+        epoch,
+        val_loss
     ):
 
-        self.optimizer.load_state_dict(
-            checkpoint[
-                "optimizer_state_dict"
-            ]
-        )
+        if val_loss < self.best_val_loss:
 
-    if (
-        self.scheduler is not None
-        and
-        "scheduler_state_dict"
-        in checkpoint
-    ):
-
-        self.scheduler.load_state_dict(
-            checkpoint[
-                "scheduler_state_dict"
-            ]
-        )
-
-    if (
-        self.scaler is not None
-        and
-        "scaler_state_dict"
-        in checkpoint
-    ):
-
-        self.scaler.load_state_dict(
-            checkpoint[
-                "scaler_state_dict"
-            ]
-        )
-
-    self.best_val_loss = checkpoint.get(
-        "best_val_loss",
-        checkpoint.get(
-            "val_loss",
-            float("inf")
-        )
-    )
-
-    start_epoch = (
-        checkpoint.get(
-            "epoch",
-            0
-        )
-    )
-
-    self.logger.info(
-        f"Checkpoint loaded: "
-        f"{checkpoint_path}"
-    )
-
-    self.logger.info(
-        f"Resuming from epoch "
-        f"{start_epoch}"
-    )
-
-    return start_epoch
-
-# ==================================================
-# Best Checkpoint
-# ==================================================
-
-def save_best_checkpoint(
-    self,
-    epoch,
-    val_loss
-):
-
-    if val_loss < self.best_val_loss:
-
-        self.best_val_loss = val_loss
-
-        self.save_checkpoint(
-            epoch=epoch,
-            val_loss=val_loss,
-            filename="best_model.pth"
-        )
-
-# ==================================================
-# Main Training Loop
-# ==================================================
-
-def fit(
-    self,
-    train_loader,
-    val_loader,
-    epochs,
-    resume_checkpoint=None
-):
-
-    start_epoch = 0
-
-    last_val_loss = float(
-        "inf"
-    )
-
-    # ==================================================
-    # Resume
-    # ==================================================
-
-    if resume_checkpoint is not None:
-
-        start_epoch = (
-            self.load_checkpoint(
-                resume_checkpoint
-            )
-        )
-
-        self.logger.info(
-            f"Training will continue "
-            f"from epoch {start_epoch + 1}."
-        )
-
-    # ==================================================
-    # Training
-    # ==================================================
-
-    try:
-
-        for epoch in range(
-            start_epoch,
-            epochs
-        ):
-
-            current_epoch = (
-                epoch + 1
-            )
-
-            train_loss, train_acc = (
-                self.train_one_epoch(
-                    train_loader
-                )
-            )
-
-            val_loss, val_acc = (
-                self.validate(
-                    val_loader
-                )
-            )
-
-            last_val_loss = val_loss
-
-            # ==================================================
-            # Scheduler
-            # ==================================================
-
-            if self.scheduler is not None:
-
-                self.scheduler.step()
-
-            current_lr = (
-                self.optimizer
-                .param_groups[0]["lr"]
-            )
-
-            # ==================================================
-            # Logging
-            # ==================================================
-
-            self.logger.info(
-                f"Epoch "
-                f"{current_epoch}/{epochs} | "
-                f"Train Loss: "
-                f"{train_loss:.4f} | "
-                f"Train Acc: "
-                f"{train_acc:.4f} | "
-                f"Val Loss: "
-                f"{val_loss:.4f} | "
-                f"Val Acc: "
-                f"{val_acc:.4f} | "
-                f"LR: "
-                f"{current_lr:.6f}"
-            )
-
-            # ==================================================
-            # Save Best
-            # ==================================================
-
-            self.save_best_checkpoint(
-                epoch=current_epoch,
-                val_loss=val_loss
-            )
-
-            # ==================================================
-            # Save Last
-            # ==================================================
+            self.best_val_loss = val_loss
 
             self.save_checkpoint(
-                epoch=current_epoch,
+                epoch=epoch,
                 val_loss=val_loss,
+                filename="best_model.pth"
+            )
+
+            self.logger.info(
+                f"New best validation loss: "
+                f"{val_loss:.4f}"
+            )
+
+        # ==================================================
+    # Training Loop
+    # ==================================================
+
+    def fit(
+        self,
+        train_loader,
+        val_loader,
+        epochs
+    ):
+
+        last_val_loss = self.best_val_loss
+
+        try:
+
+            for epoch in range(
+                self.start_epoch,
+                epochs
+            ):
+
+                current_epoch = epoch + 1
+
+                self.logger.info(
+                    "-" * 70
+                )
+
+                self.logger.info(
+                    f"Epoch {current_epoch}/{epochs}"
+                )
+
+                # ----------------------------------
+                # Training
+                # ----------------------------------
+
+                train_loss, train_acc = (
+                    self.train_one_epoch(
+                        train_loader
+                    )
+                )
+
+                # ----------------------------------
+                # Validation
+                # ----------------------------------
+
+                val_loss, val_acc = (
+                    self.validate(
+                        val_loader
+                    )
+                )
+
+                last_val_loss = val_loss
+
+                # ----------------------------------
+                # Scheduler
+                # ----------------------------------
+
+                if self.scheduler is not None:
+
+                    self.scheduler.step()
+
+                current_lr = (
+                    self.optimizer
+                    .param_groups[0]["lr"]
+                )
+
+                # ----------------------------------
+                # Logging
+                # ----------------------------------
+
+                self.logger.info(
+                    f"Train Loss : {train_loss:.4f}"
+                )
+
+                self.logger.info(
+                    f"Train Acc  : {train_acc:.4f}"
+                )
+
+                self.logger.info(
+                    f"Val Loss   : {val_loss:.4f}"
+                )
+
+                self.logger.info(
+                    f"Val Acc    : {val_acc:.4f}"
+                )
+
+                self.logger.info(
+                    f"Learning Rate : "
+                    f"{current_lr:.8f}"
+                )
+
+                # ----------------------------------
+                # Save Best Model
+                # ----------------------------------
+
+                self.save_best_checkpoint(
+                    epoch=current_epoch,
+                    val_loss=val_loss
+                )
+
+            # ----------------------------------
+            # Save Final Model
+            # ----------------------------------
+
+            self.save_checkpoint(
+                epoch=epochs,
+                val_loss=last_val_loss,
                 filename="last_model.pth"
             )
 
-        self.logger.info(
-            "Training Complete."
-        )
+            self.logger.info(
+                "-" * 70
+            )
 
-    except KeyboardInterrupt:
+            self.logger.info(
+                "Training completed successfully."
+            )
 
-        self.logger.warning(
-            "Training interrupted."
-        )
+            self.logger.info(
+                f"Best Validation Loss: "
+                f"{self.best_val_loss:.4f}"
+            )
 
-        self.save_checkpoint(
-            epoch=current_epoch,
-            val_loss=last_val_loss,
-            filename="interrupted_model.pth"
-        )
+        except KeyboardInterrupt:
 
-        self.logger.info(
-            "Interrupted checkpoint saved."
-        )
-```
+            self.logger.warning(
+                "Training interrupted by user."
+            )
+
+            self.save_checkpoint(
+                epoch=current_epoch,
+                val_loss=last_val_loss,
+                filename="interrupted_model.pth"
+            )
+
+            self.logger.info(
+                "Interrupted checkpoint saved."
+            )
+
+        except Exception as error:
+
+            self.logger.exception(
+                error
+            )
+
+            self.save_checkpoint(
+                epoch=current_epoch,
+                val_loss=last_val_loss,
+                filename="crashed_model.pth"
+            )
+
+            raise
