@@ -421,7 +421,7 @@ class Trainer:
                 f"{val_loss:.4f}"
             )
 
-        # ==================================================
+    # ==================================================
     # Training Loop
     # ==================================================
 
@@ -465,60 +465,27 @@ class Trainer:
                 # Validation
                 # ----------------------------------
 
-                val_loss, val_acc = (
-                    self.validate(
+                # Validate every 5 epochs
+                if (current_epoch % 5 == 0) or (current_epoch == epochs):
+
+                    val_loss, val_acc = self.validate(
                         val_loader
                     )
-                )
 
-                last_val_loss = val_loss
+                    last_val_loss = val_loss
 
-                # ----------------------------------
-                # Scheduler
-                # ----------------------------------
+                    self.save_best_checkpoint(
+                        epoch=current_epoch,
+                        val_loss=val_loss
+                    )
+
+                else:
+
+                    val_loss = float("nan")
+                    val_acc = float("nan")
 
                 if self.scheduler is not None:
-
                     self.scheduler.step()
-
-                current_lr = (
-                    self.optimizer
-                    .param_groups[0]["lr"]
-                )
-
-                # ----------------------------------
-                # Logging
-                # ----------------------------------
-
-                self.logger.info(
-                    f"Train Loss : {train_loss:.4f}"
-                )
-
-                self.logger.info(
-                    f"Train Acc  : {train_acc:.4f}"
-                )
-
-                self.logger.info(
-                    f"Val Loss   : {val_loss:.4f}"
-                )
-
-                self.logger.info(
-                    f"Val Acc    : {val_acc:.4f}"
-                )
-
-                self.logger.info(
-                    f"Learning Rate : "
-                    f"{current_lr:.8f}"
-                )
-
-                # ----------------------------------
-                # Save Best Model
-                # ----------------------------------
-
-                self.save_best_checkpoint(
-                    epoch=current_epoch,
-                    val_loss=val_loss
-                )
 
             # ----------------------------------
             # Save Final Model
