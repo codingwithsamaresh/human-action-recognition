@@ -33,6 +33,10 @@ from src.utils.device import (
     get_device
 )
 
+from src.utils.config_loader import ConfigLoader
+
+config = ConfigLoader.load("configs/colab_config.yaml")
+
 
 class ROCEvaluator:
 
@@ -246,11 +250,8 @@ class ROCEvaluator:
 def main():
 
     evaluator = ROCEvaluator(
-        checkpoint_path=
-        "weights/checkpoints/best_model.pth",
-
-        dataset_dir=
-        "data/test"
+        checkpoint_path=f"{config.checkpoint.save_dir}/best_model.pth",
+        dataset_dir=config.dataset.test_dir
     )
 
     evaluator.generate()

@@ -12,19 +12,42 @@ from src.inference.inference_engine import (
     InferenceEngine
 )
 
+from src.utils.config_loader import (
+    ConfigLoader
+)
+
+
+
 
 def main():
 
-    engine = InferenceEngine(
-        checkpoint_path=
-        "weights/checkpoints/best_model.pth",
+    # ---------------------------------
+    # Load configuration
+    # ---------------------------------
 
-        class_names=[
-            "TestAction"
-        ],
-
-        sequence_length=16
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
     )
+
+    # ---------------------------------
+    # Load dataset only to obtain
+    # class names
+    # ---------------------------------
+
+    
+
+    # ---------------------------------
+    # Create inference engine
+    # ---------------------------------
+
+    engine = InferenceEngine(
+        checkpoint_path=f"{config.checkpoint.save_dir}/best_model.pth",
+        sequence_length=config.dataset.sequence_length
+    )
+
+    # ---------------------------------
+    # Webcam
+    # ---------------------------------
 
     cap = cv2.VideoCapture(0)
 
@@ -35,38 +58,50 @@ def main():
         )
 
     print(
-        "Press Q to quit."
+        "\nPress Q to quit.\n"
     )
 
-    while True:
+    try:
 
-        success, frame = cap.read()
+        while True:
 
-        if not success:
-            break
+            success, frame = cap.read()
 
-        frame = (
-            engine.process_frame(
+            if not success:
+                break
+
+            frame = engine.process_frame(
                 frame
             )
+
+            cv2.imshow(
+                "Human Action Recognition",
+                frame
+            )
+
+            key = (
+                cv2.waitKey(1)
+                & 0xFF
+            )
+
+            if key in (
+                ord("q"),
+                ord("Q"),
+                27
+            ):
+                break
+
+    except KeyboardInterrupt:
+
+        print(
+            "\nStopping webcam inference..."
         )
 
-        cv2.imshow(
-            "Human Action Recognition",
-            frame
-        )
+    finally:
 
-        key = (
-            cv2.waitKey(1)
-            & 0xFF
-        )
+        cap.release()
 
-        if key == ord("q"):
-            break
-
-    cap.release()
-
-    cv2.destroyAllWindows()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

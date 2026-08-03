@@ -4,19 +4,19 @@ Multi-Person Webcam Inference
 Pipeline:
 
 Webcam
-  ↓
+    ↓
 YOLO Detection
-  ↓
+    ↓
 Tracking
-  ↓
+    ↓
 ROI Cropping
-  ↓
+    ↓
 Multi-Person Buffers
-  ↓
+    ↓
 Action Recognition
-  ↓
+    ↓
 Alerts
-  ↓
+    ↓
 Overlay Rendering
 """
 
@@ -26,42 +26,35 @@ from src.detection.yolo_detector import YOLODetector
 from src.detection.roi_cropper import ROICropper
 from src.detection.tracker import CentroidTracker
 
-from src.inference.multi_person_buffer import (
-    MultiPersonBuffer
-)
+from src.inference.multi_person_buffer import MultiPersonBuffer
+from src.inference.action_predictor import ActionPredictor
 
-from src.inference.action_predictor import (
-    ActionPredictor
-)
+from src.visualization.overlay import OverlayDrawer
 
-from src.visualization.overlay import (
-    OverlayDrawer
-)
+from src.alerts.alert_manager import AlertManager
+from src.alerts.sound_alert import SoundAlert
 
-from src.alerts.alert_manager import (
-    AlertManager
-)
+from src.utils.config_loader import ConfigLoader
 
-from src.alerts.sound_alert import (
-    SoundAlert
-)
 
 
 def main():
 
     # ---------------------------------
-    # Configuration
+    # Load configuration
     # ---------------------------------
 
-    sequence_length = 16
-
-    checkpoint_path = (
-        "weights/checkpoints/best_model.pth"
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
     )
 
-    class_names = [
-        "TestAction"
-    ]
+    
+
+    sequence_length = config.dataset.sequence_length
+
+    checkpoint_path = (
+        f"{config.checkpoint.save_dir}/best_model.pth"
+    )
 
     # ---------------------------------
     # Components
@@ -74,7 +67,7 @@ def main():
     tracker = CentroidTracker()
 
     cropper = ROICropper(
-        output_size=224
+        output_size=config.dataset.image_size
     )
 
     buffers = MultiPersonBuffer(
@@ -83,8 +76,8 @@ def main():
 
     predictor = ActionPredictor(
         checkpoint_path=checkpoint_path,
-        class_names=class_names,
-        sequence_length=sequence_length
+        sequence_length=sequence_length,
+        image_size=config.dataset.image_size
     )
 
     overlay = OverlayDrawer()
@@ -95,7 +88,6 @@ def main():
 
     # ---------------------------------
     # Store latest prediction
-    # per track
     # ---------------------------------
 
     track_predictions = {}
@@ -122,34 +114,25 @@ def main():
             break
 
         # ---------------------------------
-        # Detection
+        # Person Detection
         # ---------------------------------
 
-        detections = detector.detect(
-            frame
-        )
+        detections = detector.detect(frame)
 
         # ---------------------------------
         # Tracking
         # ---------------------------------
 
-        tracks = tracker.update(
-            detections
-        )
+        tracks = tracker.update(detections)
 
         # ---------------------------------
-        # Process each track
+        # Process each tracked person
         # ---------------------------------
 
         for track in tracks:
 
-            track_id = track[
-                "track_id"
-            ]
-
-            bbox = track[
-                "bbox"
-            ]
+            track_id = track["track_id"]
+            bbox = track["bbox"]
 
             roi = cropper.crop(
                 frame,
@@ -159,40 +142,23 @@ def main():
             if roi is None:
                 continue
 
-            # -----------------------------
-            # Update buffer
-            # -----------------------------
-
             buffers.update(
                 track_id,
                 roi
             )
 
-            # -----------------------------
-            # Predict action
-            # -----------------------------
+            if buffers.ready(track_id):
 
-            if buffers.ready(
-                track_id
-            ):
-
-                sequence = (
-                    buffers.get_sequence(
-                        track_id
-                    )
+                sequence = buffers.get_sequence(
+                    track_id
                 )
 
                 result = predictor.predict(
                     sequence
                 )
 
-                action = result[
-                    "action"
-                ]
-
-                confidence = result[
-                    "confidence"
-                ]
+                action = result["action"]
+                confidence = result["confidence"]
 
                 track_predictions[
                     track_id
@@ -201,27 +167,18 @@ def main():
                     confidence
                 )
 
-                # -------------------------
-                # Alert Processing
-                # -------------------------
-
                 alert_result = (
-                    alert_manager
-                    .process_prediction(
+                    alert_manager.process_prediction(
                         track_id,
                         action,
                         confidence
                     )
                 )
 
-                if alert_result[
-                    "alert"
-                ]:
+                if alert_result["alert"]:
 
                     sound_alert.trigger(
-                        alert_result[
-                            "severity"
-                        ]
+                        alert_result["severity"]
                     )
 
         # ---------------------------------
@@ -230,26 +187,15 @@ def main():
 
         for track in tracks:
 
-            track_id = track[
-                "track_id"
-            ]
-
-            bbox = track[
-                "bbox"
-            ]
+            track_id = track["track_id"]
+            bbox = track["bbox"]
 
             action = None
             confidence = None
 
-            if (
-                track_id
-                in track_predictions
-            ):
+            if track_id in track_predictions:
 
-                (
-                    action,
-                    confidence
-                ) = (
+                action, confidence = (
                     track_predictions[
                         track_id
                     ]
@@ -263,12 +209,8 @@ def main():
                 confidence
             )
 
-        # ---------------------------------
-        # Display
-        # ---------------------------------
-
         cv2.imshow(
-            "Multi-Person HAR",
+            "Multi-Person Human Action Recognition",
             frame
         )
 
@@ -277,11 +219,14 @@ def main():
             & 0xFF
         )
 
-        if key == ord("q"):
+        if key in (
+            ord("q"),
+            ord("Q"),
+            27
+        ):
             break
 
     cap.release()
-
     cv2.destroyAllWindows()
 
 

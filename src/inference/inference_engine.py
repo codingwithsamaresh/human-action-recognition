@@ -62,7 +62,6 @@ class InferenceEngine:
     def __init__(
         self,
         checkpoint_path,
-        class_names,
         sequence_length=16
     ):
 
@@ -92,8 +91,6 @@ class InferenceEngine:
                 checkpoint_path=
                 checkpoint_path,
 
-                class_names=
-                class_names,
 
                 sequence_length=
                 sequence_length

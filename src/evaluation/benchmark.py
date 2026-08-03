@@ -17,12 +17,10 @@ import time
 
 import torch
 
-from src.models.cnn_lstm_baseline import (
-    CNNLSTMBaseline
-)
-from src.utils.device import (
-    get_device
-)
+from src.models.cnn_lstm_baseline import CNNLSTMBaseline
+from src.utils.device import get_device
+from src.utils.config_loader import ConfigLoader
+from src.data.dataset import ActionSequenceDataset
 
 
 class Benchmark:
@@ -47,9 +45,7 @@ class Benchmark:
             pretrained=False
         )
 
-        self._load_checkpoint(
-            checkpoint_path
-        )
+        self._load_checkpoint(checkpoint_path)
 
     def _load_checkpoint(
         self,
@@ -76,15 +72,12 @@ class Benchmark:
                 checkpoint
             )
 
-        self.model.to(
-            self.device
-        )
+        self.model.to(self.device)
 
         self.model.eval()
 
         print(
-            f"Loaded checkpoint from: "
-            f"{checkpoint_path}"
+            f"Loaded checkpoint:\n{checkpoint_path}"
         )
 
     def count_parameters(self):
@@ -114,7 +107,7 @@ class Benchmark:
             self.image_size
         ).to(self.device)
 
-        # Warmup
+        # Warm-up
         for _ in range(10):
             _ = self.model(dummy_input)
 
@@ -147,21 +140,24 @@ class Benchmark:
 
         size_mb = self.get_model_size_mb()
 
-        latency_ms, fps = (
-            self.benchmark_inference()
-        )
+        latency_ms, fps = self.benchmark_inference()
 
         report = {
+
             "device": str(self.device),
+
             "parameters": int(params),
+
             "model_size_mb": round(
                 size_mb,
                 2
             ),
+
             "latency_ms": round(
                 latency_ms,
                 2
             ),
+
             "fps": round(
                 fps,
                 2
@@ -178,8 +174,7 @@ class Benchmark:
         )
 
         report_path = (
-            output_dir
-            /
+            output_dir /
             "benchmark_report.json"
         )
 
@@ -195,11 +190,47 @@ class Benchmark:
                 indent=4
             )
 
-        print(report)
+        print("\n========== Benchmark ==========")
+
+        for k, v in report.items():
+            print(f"{k:15}: {v}")
+
+        print("===============================\n")
 
         print(
-            f"\nSaved benchmark report:\n"
-            f"{report_path}"
+            f"Saved benchmark report:\n{report_path}"
         )
 
         return report
+
+
+def main():
+
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
+    )
+
+    dataset = ActionSequenceDataset(
+        sequence_root=config.dataset.test_dir
+    )
+
+    benchmark = Benchmark(
+
+        checkpoint_path=(
+            f"{config.checkpoint.save_dir}/best_model.pth"
+        ),
+
+        num_classes=dataset.get_num_classes(),
+
+        sequence_length=config.dataset.sequence_length,
+
+        image_size=config.dataset.image_size,
+
+        runs=100
+    )
+
+    benchmark.run()
+
+
+if __name__ == "__main__":
+    main()

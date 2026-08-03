@@ -12,11 +12,16 @@ import cv2
 from src.inference.sliding_window import SlidingWindow
 from src.inference.action_predictor import ActionPredictor
 
+from src.utils.config_loader import ConfigLoader
+
+
+
+config = ConfigLoader.load("configs/colab_config.yaml")
+
 
 def run_video_inference(
     video_path,
     checkpoint_path,
-    class_names,
     sequence_length=16,
     stride=4
 ):
@@ -33,7 +38,6 @@ def run_video_inference(
 
     predictor = ActionPredictor(
         checkpoint_path=checkpoint_path,
-        class_names=class_names,
         sequence_length=sequence_length
     )
 
@@ -42,9 +46,7 @@ def run_video_inference(
         stride=stride
     )
 
-    cap = cv2.VideoCapture(
-        str(video_path)
-    )
+    cap = cv2.VideoCapture(str(video_path))
 
     if not cap.isOpened():
         raise RuntimeError(
@@ -54,9 +56,7 @@ def run_video_inference(
     current_action = "Waiting..."
     current_confidence = 0.0
 
-    print(
-        f"Processing: {video_path}"
-    )
+    print(f"Processing: {video_path}")
 
     try:
 
@@ -71,21 +71,12 @@ def run_video_inference(
 
             if sliding_window.ready():
 
-                frames = (
-                    sliding_window.get_window()
-                )
+                frames = sliding_window.get_window()
 
-                result = predictor.predict(
-                    frames
-                )
+                result = predictor.predict(frames)
 
-                current_action = result[
-                    "action"
-                ]
-
-                current_confidence = result[
-                    "confidence"
-                ]
+                current_action = result["action"]
+                current_confidence = result["confidence"]
 
             cv2.putText(
                 frame,
@@ -112,43 +103,30 @@ def run_video_inference(
                 frame
             )
 
-            key = (
-                cv2.waitKey(30)
-                & 0xFF
-            )
+            key = cv2.waitKey(30) & 0xFF
 
-            if key in [
-                ord("q"),
-                ord("Q"),
-                27
-            ]:
+            if key in [ord("q"), ord("Q"), 27]:
                 break
 
     except KeyboardInterrupt:
 
-        print(
-            "\nStopping video inference..."
-        )
+        print("\nStopping video inference...")
 
     finally:
 
         cap.release()
-
         cv2.destroyAllWindows()
 
 
 def main():
 
+    # Load class names from dataset
+    
+
     run_video_inference(
         video_path="sample.mp4",
-        checkpoint_path=
-        "weights/checkpoints/best_model.pth",
-
-        class_names=[
-            "TestAction"
-        ],
-
-        sequence_length=16,
+        checkpoint_path=f"{config.checkpoint.save_dir}/best_model.pth",
+        sequence_length=config.dataset.sequence_length,
         stride=4
     )
 

@@ -23,6 +23,7 @@ from sklearn.metrics import confusion_matrix
 from src.data.dataset import ActionSequenceDataset
 from src.models.cnn_lstm_baseline import CNNLSTMBaseline
 from src.utils.device import get_device
+from src.utils.config_loader import ConfigLoader
 
 
 class ConfusionMatrixEvaluator:
@@ -31,8 +32,7 @@ class ConfusionMatrixEvaluator:
         self,
         checkpoint_path,
         dataset_dir,
-        output_path=
-        "outputs/visualizations/confusion_matrix.png",
+        output_path="outputs/visualizations/confusion_matrix.png",
         batch_size=8,
         image_size=224
     ):
@@ -56,14 +56,11 @@ class ConfusionMatrixEvaluator:
         )
 
         self.model = CNNLSTMBaseline(
-            num_classes=
-            self.dataset.get_num_classes(),
+            num_classes=self.dataset.get_num_classes(),
             pretrained=False
         )
 
-        self.output_path = Path(
-            output_path
-        )
+        self.output_path = Path(output_path)
 
         self.output_path.parent.mkdir(
             parents=True,
@@ -99,9 +96,7 @@ class ConfusionMatrixEvaluator:
                 checkpoint
             )
 
-        self.model.to(
-            self.device
-        )
+        self.model.to(self.device)
 
         self.model.eval()
 
@@ -144,9 +139,7 @@ class ConfusionMatrixEvaluator:
             all_preds
         )
 
-        plt.figure(
-            figsize=(8, 6)
-        )
+        plt.figure(figsize=(8, 6))
 
         sns.heatmap(
             cm,
@@ -157,17 +150,9 @@ class ConfusionMatrixEvaluator:
             yticklabels=self.class_names
         )
 
-        plt.xlabel(
-            "Predicted Label"
-        )
-
-        plt.ylabel(
-            "True Label"
-        )
-
-        plt.title(
-            "Confusion Matrix"
-        )
+        plt.xlabel("Predicted Label")
+        plt.ylabel("True Label")
+        plt.title("Confusion Matrix")
 
         plt.tight_layout()
 
@@ -188,14 +173,17 @@ class ConfusionMatrixEvaluator:
 
 def main():
 
-    evaluator = (
-        ConfusionMatrixEvaluator(
-            checkpoint_path=
-            "weights/checkpoints/best_model.pth",
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
+    )
 
-            dataset_dir=
-            "data/processed/sequences"
-        )
+    evaluator = ConfusionMatrixEvaluator(
+        checkpoint_path=(
+            f"{config.checkpoint.save_dir}/best_model.pth"
+        ),
+        dataset_dir=config.dataset.test_dir,
+        batch_size=config.training.batch_size,
+        image_size=config.dataset.image_size
     )
 
     evaluator.generate()

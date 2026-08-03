@@ -14,6 +14,11 @@ import torch.nn.functional as F
 
 from src.models.cnn_lstm_baseline import CNNLSTMBaseline
 from src.utils.device import get_device
+from src.utils.config_loader import ConfigLoader
+from src.data.dataset import ActionSequenceDataset
+
+
+config = ConfigLoader.load("configs/colab_config.yaml")
 
 
 class ActionPredictor:
@@ -24,18 +29,28 @@ class ActionPredictor:
     def __init__(
         self,
         checkpoint_path,
-        class_names,
         sequence_length=16,
         image_size=224
     ):
+
         self.device = get_device()
 
-        self.class_names = class_names
         self.sequence_length = sequence_length
         self.image_size = image_size
 
+        # -----------------------------------
+        # Load class names automatically
+        # -----------------------------------
+
+        dataset = ActionSequenceDataset(
+            sequence_root=config.dataset.train_dir,
+            image_size=image_size
+        )
+
+        self.class_names = dataset.get_class_names()
+
         self.model = CNNLSTMBaseline(
-            num_classes=len(class_names),
+            num_classes=len(self.class_names),
             pretrained=False
         )
 
@@ -49,18 +64,13 @@ class ActionPredictor:
         self,
         checkpoint_path
     ):
-        """
-        Load trained checkpoint.
-        Supports both:
-            - state_dict only
-            - training checkpoint dictionary
-        """
 
         checkpoint_path = Path(
             checkpoint_path
         )
 
         if not checkpoint_path.exists():
+
             raise FileNotFoundError(
                 f"Checkpoint not found: {checkpoint_path}"
             )
@@ -74,29 +84,29 @@ class ActionPredictor:
             isinstance(checkpoint, dict)
             and "model_state_dict" in checkpoint
         ):
+
             self.model.load_state_dict(
                 checkpoint["model_state_dict"]
             )
+
         else:
+
             self.model.load_state_dict(
                 checkpoint
             )
 
-        self.model.to(self.device)
+        self.model.to(
+            self.device
+        )
 
         print(
-            f"Loaded checkpoint from: "
-            f"{checkpoint_path}"
+            f"Loaded checkpoint from: {checkpoint_path}"
         )
 
     def _preprocess_frame(
         self,
         frame
     ):
-        """
-        Convert OpenCV BGR frame into
-        normalized CHW tensor format.
-        """
 
         frame = cv2.cvtColor(
             frame,
@@ -140,14 +150,13 @@ class ActionPredictor:
         self,
         frames
     ):
-        """
-        Convert list of frames into:
-            (1, T, C, H, W)
-        """
 
         processed_frames = [
+
             self._preprocess_frame(frame)
+
             for frame in frames
+
         ]
 
         sequence = np.stack(
@@ -171,21 +180,9 @@ class ActionPredictor:
         self,
         frames
     ):
-        """
-        Predict action from a sequence of frames.
-
-        Args:
-            frames:
-                List of frames
-
-        Returns:
-            {
-                "action": str,
-                "confidence": float
-            }
-        """
 
         if len(frames) != self.sequence_length:
+
             raise ValueError(
                 f"Expected {self.sequence_length} frames, "
                 f"got {len(frames)}"
@@ -213,8 +210,11 @@ class ActionPredictor:
         ]
 
         return {
+
             "action": action,
+
             "confidence": float(
                 confidence.item()
             )
+
         }

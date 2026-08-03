@@ -9,20 +9,22 @@ from ultralytics import YOLO
 
 
 class YOLODetector:
+    """
+    YOLOv8-based person detector.
+    """
 
     def __init__(
         self,
         model_path="yolov8n.pt",
-        confidence_threshold=0.05
+        confidence_threshold=0.25
     ):
-
         self.model = YOLO(model_path)
 
         self.confidence_threshold = (
             confidence_threshold
         )
 
-        # COCO person class
+        # COCO class ID for person
         self.person_class_id = 0
 
     def detect(
@@ -30,10 +32,16 @@ class YOLODetector:
         frame
     ):
         """
-        Args:
-            frame (numpy.ndarray)
+        Detect persons in an image.
 
-        Returns:
+        Parameters
+        ----------
+        frame : numpy.ndarray
+            Input BGR frame.
+
+        Returns
+        -------
+        list
             [
                 {
                     "bbox": [x1, y1, x2, y2],
@@ -47,58 +55,18 @@ class YOLODetector:
             verbose=False
         )
 
-        # -------------------------
-        # DEBUG INFO
-        # -------------------------
-
-        try:
-
-            print(
-                "\nClasses:",
-                results[0].names
-            )
-
-            if results[0].boxes is not None:
-
-                print(
-                    "Raw boxes:",
-                    len(results[0].boxes)
-                )
-
-        except Exception as e:
-
-            print(
-                "Debug error:",
-                e
-            )
-
-        # -------------------------
-
         detections = []
 
         for result in results:
 
-            boxes = result.boxes
-
-            if boxes is None:
+            if result.boxes is None:
                 continue
 
-            for box in boxes:
+            for box in result.boxes:
 
                 cls_id = int(
                     box.cls.item()
                 )
-
-                confidence = float(
-                    box.conf.item()
-                )
-
-                print(
-                    f"class={cls_id} "
-                    f"conf={confidence:.3f}"
-                )
-
-                # Keep only persons
 
                 if (
                     cls_id
@@ -106,7 +74,9 @@ class YOLODetector:
                 ):
                     continue
 
-                # Confidence filter
+                confidence = float(
+                    box.conf.item()
+                )
 
                 if (
                     confidence
@@ -130,8 +100,7 @@ class YOLODetector:
                             x2,
                             y2
                         ],
-                        "confidence":
-                        confidence
+                        "confidence": confidence
                     }
                 )
 
