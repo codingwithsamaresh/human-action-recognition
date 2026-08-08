@@ -1,8 +1,8 @@
 """
 ROC Curve Generator
 
-Generates ROC curve and AUC score
-for trained action recognition model.
+Generates ROC curves and AUC scores
+for the trained CNN-LSTM action recognition model.
 
 Output:
 outputs/visualizations/roc_curve.png
@@ -23,19 +23,10 @@ from sklearn.metrics import (
 )
 from sklearn.preprocessing import label_binarize
 
-from src.data.dataset import (
-    ActionSequenceDataset
-)
-from src.models.cnn_lstm_baseline import (
-    CNNLSTMBaseline
-)
-from src.utils.device import (
-    get_device
-)
-
+from src.data.dataset import ActionSequenceDataset
+from src.models.cnn_lstm_baseline import CNNLSTMBaseline
+from src.utils.device import get_device
 from src.utils.config_loader import ConfigLoader
-
-config = ConfigLoader.load("configs/colab_config.yaml")
 
 
 class ROCEvaluator:
@@ -44,19 +35,22 @@ class ROCEvaluator:
         self,
         checkpoint_path,
         dataset_dir,
-        output_path=
-        "outputs/visualizations/roc_curve.png",
+        output_path="outputs/visualizations/roc_curve.png",
         batch_size=8,
         image_size=224
     ):
 
         self.device = get_device()
 
-        self.dataset = (
-            ActionSequenceDataset(
-                sequence_root=dataset_dir,
-                image_size=image_size
-            )
+        # ---------------------------------
+        # Dataset
+        # ---------------------------------
+
+        print("\nLoading test dataset...")
+
+        self.dataset = ActionSequenceDataset(
+            sequence_root=dataset_dir,
+            image_size=image_size
         )
 
         self.class_names = (
@@ -67,6 +61,15 @@ class ROCEvaluator:
             self.dataset.get_num_classes()
         )
 
+        print(
+            f"Loaded {len(self.dataset)} sequences "
+            f"from {self.num_classes} classes."
+        )
+
+        # ---------------------------------
+        # DataLoader
+        # ---------------------------------
+
         self.dataloader = DataLoader(
             self.dataset,
             batch_size=batch_size,
@@ -74,10 +77,20 @@ class ROCEvaluator:
             num_workers=0
         )
 
+        # ---------------------------------
+        # Model
+        # ---------------------------------
+
+        print("Creating model...")
+
         self.model = CNNLSTMBaseline(
             num_classes=self.num_classes,
             pretrained=False
         )
+
+        # ---------------------------------
+        # Output
+        # ---------------------------------
 
         self.output_path = Path(
             output_path
@@ -88,6 +101,10 @@ class ROCEvaluator:
             exist_ok=True
         )
 
+        # ---------------------------------
+        # Load checkpoint
+        # ---------------------------------
+
         self._load_checkpoint(
             checkpoint_path
         )
@@ -96,6 +113,17 @@ class ROCEvaluator:
         self,
         checkpoint_path
     ):
+
+        checkpoint_path = Path(
+            checkpoint_path
+        )
+
+        if not checkpoint_path.exists():
+
+            raise FileNotFoundError(
+                f"Checkpoint not found:\n"
+                f"{checkpoint_path}"
+            )
 
         checkpoint = torch.load(
             checkpoint_path,
@@ -124,7 +152,7 @@ class ROCEvaluator:
         self.model.eval()
 
         print(
-            f"Loaded checkpoint from: "
+            f"Loaded checkpoint from:\n"
             f"{checkpoint_path}"
         )
 
@@ -140,8 +168,14 @@ class ROCEvaluator:
 
             return None
 
+        # ---------------------------------
+        # Collect predictions
+        # ---------------------------------
+
         all_probs = []
         all_targets = []
+
+        print("\nGenerating ROC data...")
 
         for frames, targets in self.dataloader:
 
@@ -153,18 +187,26 @@ class ROCEvaluator:
                 frames
             )
 
-            probs = torch.softmax(
+            probabilities = torch.softmax(
                 logits,
                 dim=1
             )
 
             all_probs.append(
-                probs.cpu().numpy()
+                probabilities.cpu().numpy()
             )
 
             all_targets.append(
-                targets.numpy()
+                targets.cpu().numpy()
             )
+
+        if not all_probs:
+
+            print(
+                "No predictions were generated."
+            )
+
+            return None
 
         y_score = np.concatenate(
             all_probs,
@@ -176,20 +218,51 @@ class ROCEvaluator:
             axis=0
         )
 
+        # ---------------------------------
+        # Convert labels to one-vs-rest
+        # ---------------------------------
+
         y_true_bin = label_binarize(
             y_true,
-            classes=list(
-                range(self.num_classes)
+            classes=np.arange(
+                self.num_classes
             )
         )
 
+        # ---------------------------------
+        # Plot
+        # ---------------------------------
+
         plt.figure(
-            figsize=(8, 6)
+            figsize=(12, 9)
         )
+
+        valid_curves = 0
 
         for i in range(
             self.num_classes
         ):
+
+            # Skip classes that do not contain
+            # both positive and negative samples.
+            positives = np.sum(
+                y_true_bin[:, i]
+            )
+
+            negatives = (
+                len(y_true_bin[:, i])
+                - positives
+            )
+
+            if positives == 0 or negatives == 0:
+
+                print(
+                    f"Skipping ROC for "
+                    f"{self.class_names[i]} "
+                    f"(insufficient samples)."
+                )
+
+                continue
 
             fpr, tpr, _ = roc_curve(
                 y_true_bin[:, i],
@@ -204,16 +277,25 @@ class ROCEvaluator:
             plt.plot(
                 fpr,
                 tpr,
+                linewidth=1.2,
                 label=(
-                    f"{self.class_names[i]}"
-                    f" (AUC={roc_auc:.3f})"
+                    f"{self.class_names[i]} "
+                    f"(AUC={roc_auc:.3f})"
                 )
             )
+
+            valid_curves += 1
+
+        # ---------------------------------
+        # Random classifier baseline
+        # ---------------------------------
 
         plt.plot(
             [0, 1],
             [0, 1],
-            linestyle="--"
+            linestyle="--",
+            linewidth=1.5,
+            label="Random Classifier"
         )
 
         plt.xlabel(
@@ -225,22 +307,48 @@ class ROCEvaluator:
         )
 
         plt.title(
-            "ROC Curve"
+            "ROC Curves - CNN-LSTM"
         )
 
-        plt.legend()
+        plt.xlim(
+            0,
+            1
+        )
+
+        plt.ylim(
+            0,
+            1.05
+        )
+
+        # 101 classes makes a normal legend
+        # extremely large, so place it outside.
+        if valid_curves > 0:
+
+            plt.legend(
+                loc="upper left",
+                bbox_to_anchor=(
+                    1.02,
+                    1
+                ),
+                fontsize=7
+            )
+
+        plt.grid(
+            alpha=0.2
+        )
 
         plt.tight_layout()
 
         plt.savefig(
             self.output_path,
-            dpi=300
+            dpi=300,
+            bbox_inches="tight"
         )
 
         plt.close()
 
         print(
-            f"Saved ROC curve to:\n"
+            f"\nSaved ROC curve to:\n"
             f"{self.output_path}"
         )
 
@@ -249,9 +357,38 @@ class ROCEvaluator:
 
 def main():
 
+    # ---------------------------------
+    # Load Colab configuration
+    # ---------------------------------
+
+    config = ConfigLoader.load(
+        "configs/colab_config.yaml"
+    )
+
+    # ---------------------------------
+    # Checkpoint
+    # ---------------------------------
+
+    checkpoint_path = (
+        Path(
+            config.checkpoint.save_dir
+        )
+        / "best_model.pth"
+    )
+
+    # ---------------------------------
+    # Generate ROC curve
+    # ---------------------------------
+
     evaluator = ROCEvaluator(
-        checkpoint_path=f"{config.checkpoint.save_dir}/best_model.pth",
-        dataset_dir=config.dataset.test_dir
+        checkpoint_path=checkpoint_path,
+        dataset_dir=config.dataset.test_dir,
+        output_path=(
+            "outputs/visualizations/"
+            "roc_curve.png"
+        ),
+        batch_size=config.training.batch_size,
+        image_size=config.dataset.image_size
     )
 
     evaluator.generate()

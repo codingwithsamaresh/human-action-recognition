@@ -1,10 +1,10 @@
 """
 Confusion Matrix Generator
 
-Loads trained model,
-runs inference on dataset,
-builds confusion matrix,
-and saves visualization.
+Loads the trained CNN-LSTM model,
+runs inference on the test dataset,
+generates a confusion matrix,
+and saves the visualization.
 
 Output:
 outputs/visualizations/confusion_matrix.png
@@ -32,12 +32,21 @@ class ConfusionMatrixEvaluator:
         self,
         checkpoint_path,
         dataset_dir,
-        output_path="outputs/visualizations/confusion_matrix.png",
+        output_path=(
+            "outputs/visualizations/"
+            "confusion_matrix.png"
+        ),
         batch_size=8,
         image_size=224
     ):
 
         self.device = get_device()
+
+        # ---------------------------------
+        # Dataset
+        # ---------------------------------
+
+        print("\nLoading test dataset...")
 
         self.dataset = ActionSequenceDataset(
             sequence_root=dataset_dir,
@@ -48,6 +57,19 @@ class ConfusionMatrixEvaluator:
             self.dataset.get_class_names()
         )
 
+        self.num_classes = (
+            self.dataset.get_num_classes()
+        )
+
+        print(
+            f"Loaded {len(self.dataset)} sequences "
+            f"from {self.num_classes} classes."
+        )
+
+        # ---------------------------------
+        # DataLoader
+        # ---------------------------------
+
         self.dataloader = DataLoader(
             self.dataset,
             batch_size=batch_size,
@@ -55,17 +77,33 @@ class ConfusionMatrixEvaluator:
             num_workers=0
         )
 
+        # ---------------------------------
+        # Model
+        # ---------------------------------
+
+        print("Creating model...")
+
         self.model = CNNLSTMBaseline(
-            num_classes=self.dataset.get_num_classes(),
+            num_classes=self.num_classes,
             pretrained=False
         )
 
-        self.output_path = Path(output_path)
+        # ---------------------------------
+        # Output
+        # ---------------------------------
+
+        self.output_path = Path(
+            output_path
+        )
 
         self.output_path.parent.mkdir(
             parents=True,
             exist_ok=True
         )
+
+        # ---------------------------------
+        # Load checkpoint
+        # ---------------------------------
 
         self._load_checkpoint(
             checkpoint_path
@@ -75,6 +113,17 @@ class ConfusionMatrixEvaluator:
         self,
         checkpoint_path
     ):
+
+        checkpoint_path = Path(
+            checkpoint_path
+        )
+
+        if not checkpoint_path.exists():
+
+            raise FileNotFoundError(
+                f"Checkpoint not found:\n"
+                f"{checkpoint_path}"
+            )
 
         checkpoint = torch.load(
             checkpoint_path,
@@ -96,12 +145,14 @@ class ConfusionMatrixEvaluator:
                 checkpoint
             )
 
-        self.model.to(self.device)
+        self.model.to(
+            self.device
+        )
 
         self.model.eval()
 
         print(
-            f"Loaded checkpoint from: "
+            f"Loaded checkpoint from:\n"
             f"{checkpoint_path}"
         )
 
@@ -110,6 +161,12 @@ class ConfusionMatrixEvaluator:
 
         all_preds = []
         all_targets = []
+
+        print("\nGenerating confusion matrix...")
+
+        # ---------------------------------
+        # Inference
+        # ---------------------------------
 
         for frames, targets in self.dataloader:
 
@@ -121,50 +178,93 @@ class ConfusionMatrixEvaluator:
                 frames
             )
 
-            preds = torch.argmax(
+            predictions = torch.argmax(
                 logits,
                 dim=1
             )
 
             all_preds.extend(
-                preds.cpu().numpy()
+                predictions.cpu().numpy()
             )
 
             all_targets.extend(
-                targets.numpy()
+                targets.cpu().numpy()
             )
+
+        if not all_preds:
+
+            print(
+                "No predictions were generated."
+            )
+
+            return None
+
+        # ---------------------------------
+        # Confusion Matrix
+        # ---------------------------------
+
+        labels = list(
+            range(self.num_classes)
+        )
 
         cm = confusion_matrix(
             all_targets,
-            all_preds
+            all_preds,
+            labels=labels
         )
 
-        plt.figure(figsize=(8, 6))
+        # ---------------------------------
+        # Plot
+        # ---------------------------------
+
+        plt.figure(
+            figsize=(18, 16)
+        )
 
         sns.heatmap(
             cm,
-            annot=True,
-            fmt="d",
+            annot=False,
             cmap="Blues",
             xticklabels=self.class_names,
-            yticklabels=self.class_names
+            yticklabels=self.class_names,
+            square=True,
+            cbar=True
         )
 
-        plt.xlabel("Predicted Label")
-        plt.ylabel("True Label")
-        plt.title("Confusion Matrix")
+        plt.xlabel(
+            "Predicted Label"
+        )
+
+        plt.ylabel(
+            "True Label"
+        )
+
+        plt.title(
+            "Confusion Matrix - CNN-LSTM"
+        )
+
+        plt.xticks(
+            rotation=90,
+            fontsize=6
+        )
+
+        plt.yticks(
+            rotation=0,
+            fontsize=6
+        )
 
         plt.tight_layout()
 
         plt.savefig(
             self.output_path,
-            dpi=300
+            dpi=300,
+            bbox_inches="tight"
         )
 
         plt.close()
 
         print(
-            f"Saved confusion matrix to:\n"
+            f"\nSaved confusion matrix to:\n"
             f"{self.output_path}"
         )
 
@@ -173,15 +273,36 @@ class ConfusionMatrixEvaluator:
 
 def main():
 
+    # ---------------------------------
+    # Load Colab configuration
+    # ---------------------------------
+
     config = ConfigLoader.load(
         "configs/colab_config.yaml"
     )
 
+    # ---------------------------------
+    # Checkpoint
+    # ---------------------------------
+
+    checkpoint_path = (
+        Path(
+            config.checkpoint.save_dir
+        )
+        / "best_model.pth"
+    )
+
+    # ---------------------------------
+    # Generate confusion matrix
+    # ---------------------------------
+
     evaluator = ConfusionMatrixEvaluator(
-        checkpoint_path=(
-            f"{config.checkpoint.save_dir}/best_model.pth"
-        ),
+        checkpoint_path=checkpoint_path,
         dataset_dir=config.dataset.test_dir,
+        output_path=(
+            "outputs/visualizations/"
+            "confusion_matrix.png"
+        ),
         batch_size=config.training.batch_size,
         image_size=config.dataset.image_size
     )
