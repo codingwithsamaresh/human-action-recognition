@@ -3,14 +3,23 @@ Confusion Matrix Generator
 
 Loads the trained CNN-LSTM model,
 runs inference on the test dataset,
-generates a confusion matrix,
+generates a normalized confusion matrix,
 and saves the visualization.
+
+For 101 classes:
+- Uses row-normalized values
+- Removes cell annotations
+- Uses compact axis labels
+- Shows only every Nth label
+- Saves a high-resolution image
 
 Output:
 outputs/visualizations/confusion_matrix.png
 """
 
 from pathlib import Path
+
+import numpy as np
 
 import torch
 from torch.utils.data import DataLoader
@@ -162,7 +171,9 @@ class ConfusionMatrixEvaluator:
         all_preds = []
         all_targets = []
 
-        print("\nGenerating confusion matrix...")
+        print(
+            "\nGenerating confusion matrix..."
+        )
 
         # ---------------------------------
         # Inference
@@ -200,17 +211,40 @@ class ConfusionMatrixEvaluator:
             return None
 
         # ---------------------------------
-        # Confusion Matrix
+        # Labels
         # ---------------------------------
 
         labels = list(
             range(self.num_classes)
         )
 
+        # ---------------------------------
+        # Raw confusion matrix
+        # ---------------------------------
+
         cm = confusion_matrix(
             all_targets,
             all_preds,
             labels=labels
+        )
+
+        # ---------------------------------
+        # Normalize by true class
+        # ---------------------------------
+
+        row_sums = cm.sum(
+            axis=1,
+            keepdims=True
+        )
+
+        cm_normalized = np.divide(
+            cm,
+            row_sums,
+            out=np.zeros_like(
+                cm,
+                dtype=float
+            ),
+            where=row_sums != 0
         )
 
         # ---------------------------------
@@ -222,36 +256,85 @@ class ConfusionMatrixEvaluator:
         )
 
         sns.heatmap(
-            cm,
-            annot=False,
+            cm_normalized,
             cmap="Blues",
-            xticklabels=self.class_names,
-            yticklabels=self.class_names,
+            vmin=0,
+            vmax=1,
+            annot=False,
             square=True,
-            cbar=True
+            cbar=True,
+            xticklabels=False,
+            yticklabels=False
         )
 
-        plt.xlabel(
-            "Predicted Label"
-        )
+        # ---------------------------------
+        # Show only every 5th class label
+        # ---------------------------------
 
-        plt.ylabel(
-            "True Label"
-        )
+        step = 5
 
-        plt.title(
-            "Confusion Matrix - CNN-LSTM"
-        )
+        tick_positions = np.arange(
+            0,
+            self.num_classes,
+            step
+        ) + 0.5
+
+        tick_labels = [
+            self.class_names[i]
+            for i in range(
+                0,
+                self.num_classes,
+                step
+            )
+        ]
 
         plt.xticks(
+            tick_positions,
+            tick_labels,
             rotation=90,
-            fontsize=6
+            fontsize=8
         )
 
         plt.yticks(
+            tick_positions,
+            tick_labels,
             rotation=0,
-            fontsize=6
+            fontsize=8
         )
+
+        # ---------------------------------
+        # Labels
+        # ---------------------------------
+
+        plt.xlabel(
+            "Predicted Label",
+            fontsize=13
+        )
+
+        plt.ylabel(
+            "True Label",
+            fontsize=13
+        )
+
+        plt.title(
+            "Normalized Confusion Matrix - CNN-LSTM on UCF101",
+            fontsize=16
+        )
+
+        # ---------------------------------
+        # Colorbar
+        # ---------------------------------
+
+        colorbar = plt.gca().collections[0].colorbar
+
+        colorbar.set_label(
+            "Normalized Frequency",
+            fontsize=11
+        )
+
+        # ---------------------------------
+        # Save
+        # ---------------------------------
 
         plt.tight_layout()
 
@@ -274,7 +357,7 @@ class ConfusionMatrixEvaluator:
 def main():
 
     # ---------------------------------
-    # Load Colab configuration
+    # Load configuration
     # ---------------------------------
 
     config = ConfigLoader.load(
