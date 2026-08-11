@@ -1,28 +1,37 @@
 """
 ROC Curve Generator
 
-Generates ROC curves and AUC scores
-for the trained CNN-LSTM action recognition model.
+Generates ROC curves for the 101-class CNN-LSTM
+Human Action Recognition model.
 
-For 101 classes:
-- Shows Micro-average ROC
-- Shows Macro-average ROC
-- Shows Top 15 classes by AUC
-- Avoids an unreadable 101-item legend
+Visualization strategy:
+- All class ROC curves are shown faintly
+- No 101-item legend
+- Macro-average ROC is highlighted
+- Micro-average ROC is highlighted
+- Random classifier baseline is shown
+- Per-class AUC values are saved separately
 
-Output:
+Outputs:
 outputs/visualizations/roc_curve.png
+outputs/reports/roc_auc_per_class.csv
 """
 
 from pathlib import Path
 
 import numpy as np
+
 import torch
 from torch.utils.data import DataLoader
 
 import matplotlib.pyplot as plt
 
-from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import (
+    roc_curve,
+    auc,
+    roc_auc_score
+)
+
 from sklearn.preprocessing import label_binarize
 
 from src.data.dataset import ActionSequenceDataset
@@ -37,7 +46,10 @@ class ROCEvaluator:
         self,
         checkpoint_path,
         dataset_dir,
-        output_path="outputs/visualizations/roc_curve.png",
+        output_path=(
+            "outputs/visualizations/"
+            "roc_curve.png"
+        ),
         batch_size=8,
         image_size=224
     ):
@@ -55,8 +67,13 @@ class ROCEvaluator:
             image_size=image_size
         )
 
-        self.class_names = self.dataset.get_class_names()
-        self.num_classes = self.dataset.get_num_classes()
+        self.class_names = (
+            self.dataset.get_class_names()
+        )
+
+        self.num_classes = (
+            self.dataset.get_num_classes()
+        )
 
         print(
             f"Loaded {len(self.dataset)} sequences "
@@ -89,9 +106,20 @@ class ROCEvaluator:
         # Output
         # ---------------------------------
 
-        self.output_path = Path(output_path)
+        self.output_path = Path(
+            output_path
+        )
 
         self.output_path.parent.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        self.report_dir = Path(
+            "outputs/reports"
+        )
+
+        self.report_dir.mkdir(
             parents=True,
             exist_ok=True
         )
@@ -100,15 +128,28 @@ class ROCEvaluator:
         # Load checkpoint
         # ---------------------------------
 
-        self._load_checkpoint(checkpoint_path)
+        self._load_checkpoint(
+            checkpoint_path
+        )
 
-    def _load_checkpoint(self, checkpoint_path):
+    # =====================================
+    # Load checkpoint
+    # =====================================
 
-        checkpoint_path = Path(checkpoint_path)
+    def _load_checkpoint(
+        self,
+        checkpoint_path
+    ):
+
+        checkpoint_path = Path(
+            checkpoint_path
+        )
 
         if not checkpoint_path.exists():
+
             raise FileNotFoundError(
-                f"Checkpoint not found:\n{checkpoint_path}"
+                f"Checkpoint not found:\n"
+                f"{checkpoint_path}"
             )
 
         checkpoint = torch.load(
@@ -120,13 +161,21 @@ class ROCEvaluator:
             isinstance(checkpoint, dict)
             and "model_state_dict" in checkpoint
         ):
+
             self.model.load_state_dict(
                 checkpoint["model_state_dict"]
             )
-        else:
-            self.model.load_state_dict(checkpoint)
 
-        self.model.to(self.device)
+        else:
+
+            self.model.load_state_dict(
+                checkpoint
+            )
+
+        self.model.to(
+            self.device
+        )
+
         self.model.eval()
 
         print(
@@ -134,13 +183,20 @@ class ROCEvaluator:
             f"{checkpoint_path}"
         )
 
+    # =====================================
+    # Generate ROC
+    # =====================================
+
     @torch.no_grad()
     def generate(self):
 
         if self.num_classes < 2:
+
             print(
-                "\nROC curve requires at least 2 classes."
+                "\nROC curve requires "
+                "at least 2 classes."
             )
+
             return None
 
         # ---------------------------------
@@ -150,13 +206,19 @@ class ROCEvaluator:
         all_probs = []
         all_targets = []
 
-        print("\nGenerating ROC data...")
+        print(
+            "\nGenerating ROC predictions..."
+        )
 
         for frames, targets in self.dataloader:
 
-            frames = frames.to(self.device)
+            frames = frames.to(
+                self.device
+            )
 
-            logits = self.model(frames)
+            logits = self.model(
+                frames
+            )
 
             probabilities = torch.softmax(
                 logits,
@@ -172,7 +234,11 @@ class ROCEvaluator:
             )
 
         if not all_probs:
-            print("No predictions were generated.")
+
+            print(
+                "No predictions were generated."
+            )
+
             return None
 
         y_score = np.concatenate(
@@ -191,16 +257,23 @@ class ROCEvaluator:
 
         y_true_bin = label_binarize(
             y_true,
-            classes=np.arange(self.num_classes)
+            classes=np.arange(
+                self.num_classes
+            )
         )
 
         # ---------------------------------
-        # Calculate per-class ROC/AUC
+        # Per-class ROC
         # ---------------------------------
 
-        class_results = []
+        class_aucs = []
 
-        for i in range(self.num_classes):
+        fpr_dict = {}
+        tpr_dict = {}
+
+        for i in range(
+            self.num_classes
+        ):
 
             positives = np.sum(
                 y_true_bin[:, i]
@@ -211,7 +284,11 @@ class ROCEvaluator:
                 - positives
             )
 
-            if positives == 0 or negatives == 0:
+            # Skip invalid classes
+            if (
+                positives == 0
+                or negatives == 0
+            ):
                 continue
 
             fpr, tpr, _ = roc_curve(
@@ -224,27 +301,49 @@ class ROCEvaluator:
                 tpr
             )
 
-            class_results.append(
-                {
-                    "index": i,
-                    "name": self.class_names[i],
-                    "fpr": fpr,
-                    "tpr": tpr,
-                    "auc": roc_auc
-                }
+            fpr_dict[i] = fpr
+            tpr_dict[i] = tpr
+
+            class_aucs.append(
+                (
+                    i,
+                    self.class_names[i],
+                    roc_auc
+                )
             )
 
-        if not class_results:
-            print("No valid ROC curves.")
-            return None
-
         # ---------------------------------
-        # Sort classes by AUC
+        # Macro-average ROC
         # ---------------------------------
 
-        class_results.sort(
-            key=lambda x: x["auc"],
-            reverse=True
+        all_fpr = np.unique(
+            np.concatenate(
+                [
+                    fpr_dict[i]
+                    for i in fpr_dict
+                ]
+            )
+        )
+
+        mean_tpr = np.zeros_like(
+            all_fpr
+        )
+
+        for i in fpr_dict:
+
+            mean_tpr += np.interp(
+                all_fpr,
+                fpr_dict[i],
+                tpr_dict[i]
+            )
+
+        mean_tpr /= len(
+            fpr_dict
+        )
+
+        macro_auc = auc(
+            all_fpr,
+            mean_tpr
         )
 
         # ---------------------------------
@@ -262,41 +361,67 @@ class ROCEvaluator:
         )
 
         # ---------------------------------
-        # Macro-average ROC
+        # Save per-class AUC
         # ---------------------------------
 
-        all_fpr = np.unique(
-            np.concatenate(
-                [
-                    result["fpr"]
-                    for result in class_results
-                ]
-            )
+        auc_csv = (
+            self.report_dir
+            / "roc_auc_per_class.csv"
         )
 
-        mean_tpr = np.zeros_like(all_fpr)
+        class_aucs_sorted = sorted(
+            class_aucs,
+            key=lambda x: x[2],
+            reverse=True
+        )
 
-        for result in class_results:
+        with open(
+            auc_csv,
+            "w",
+            encoding="utf-8"
+        ) as f:
 
-            mean_tpr += np.interp(
-                all_fpr,
-                result["fpr"],
-                result["tpr"]
+            f.write(
+                "class_index,class_name,auc\n"
             )
 
-        mean_tpr /= len(class_results)
+            for (
+                index,
+                class_name,
+                score
+            ) in class_aucs_sorted:
 
-        macro_auc = auc(
-            all_fpr,
-            mean_tpr
-        )
+                f.write(
+                    f"{index},"
+                    f"{class_name},"
+                    f"{score:.6f}\n"
+                )
 
         # ---------------------------------
         # Plot
         # ---------------------------------
 
         plt.figure(
-            figsize=(12, 9)
+            figsize=(11, 8)
+        )
+
+        # All class curves
+        for i in fpr_dict:
+
+            plt.plot(
+                fpr_dict[i],
+                tpr_dict[i],
+                linewidth=0.8,
+                alpha=0.18
+            )
+
+        # Random classifier
+        plt.plot(
+            [0, 1],
+            [0, 1],
+            linestyle="--",
+            linewidth=1.5,
+            label="Random Classifier"
         )
 
         # Micro-average
@@ -304,50 +429,21 @@ class ROCEvaluator:
             micro_fpr,
             micro_tpr,
             linewidth=2.5,
-            label=f"Micro-average (AUC = {micro_auc:.3f})"
+            label=(
+                f"Micro-average "
+                f"(AUC = {micro_auc:.3f})"
+            )
         )
 
         # Macro-average
         plt.plot(
             all_fpr,
             mean_tpr,
-            linewidth=2.5,
-            linestyle="--",
-            label=f"Macro-average (AUC = {macro_auc:.3f})"
-        )
-
-        # ---------------------------------
-        # Top 15 classes
-        # ---------------------------------
-
-        top_k = min(
-            15,
-            len(class_results)
-        )
-
-        for result in class_results[:top_k]:
-
-            plt.plot(
-                result["fpr"],
-                result["tpr"],
-                linewidth=1.2,
-                alpha=0.75,
-                label=(
-                    f"{result['name']} "
-                    f"(AUC={result['auc']:.3f})"
-                )
+            linewidth=3.0,
+            label=(
+                f"Macro-average "
+                f"(AUC = {macro_auc:.3f})"
             )
-
-        # ---------------------------------
-        # Random classifier
-        # ---------------------------------
-
-        plt.plot(
-            [0, 1],
-            [0, 1],
-            linestyle=":",
-            linewidth=1.5,
-            label="Random Classifier"
         )
 
         # ---------------------------------
@@ -356,17 +452,19 @@ class ROCEvaluator:
 
         plt.xlabel(
             "False Positive Rate",
-            fontsize=12
+            fontsize=13
         )
 
         plt.ylabel(
             "True Positive Rate",
-            fontsize=12
+            fontsize=13
         )
 
         plt.title(
-            "ROC Curves - CNN-LSTM on UCF101",
-            fontsize=16
+            "ROC Curves - CNN-LSTM "
+            "(101-Class UCF101)",
+            fontsize=16,
+            fontweight="bold"
         )
 
         plt.xlim(
@@ -376,7 +474,7 @@ class ROCEvaluator:
 
         plt.ylim(
             0,
-            1.05
+            1.02
         )
 
         plt.grid(
@@ -385,7 +483,7 @@ class ROCEvaluator:
 
         plt.legend(
             loc="lower right",
-            fontsize=8,
+            fontsize=11,
             frameon=True
         )
 
@@ -403,46 +501,68 @@ class ROCEvaluator:
 
         plt.close()
 
+        # ---------------------------------
+        # Print summary
+        # ---------------------------------
+
+        print(
+            "\n========================================"
+        )
+
+        print(
+            "ROC Evaluation Results"
+        )
+
+        print(
+            "========================================"
+        )
+
+        print(
+            f"Classes evaluated : "
+            f"{len(class_aucs)}"
+        )
+
+        print(
+            f"Macro AUC         : "
+            f"{macro_auc:.4f}"
+        )
+
+        print(
+            f"Micro AUC         : "
+            f"{micro_auc:.4f}"
+        )
+
+        print(
+            "========================================"
+        )
+
         print(
             f"\nSaved ROC curve to:\n"
             f"{self.output_path}"
         )
 
         print(
-            f"\nMicro-average AUC: {micro_auc:.4f}"
+            f"\nSaved per-class AUC report to:\n"
+            f"{auc_csv}"
         )
 
-        print(
-            f"Macro-average AUC: {macro_auc:.4f}"
-        )
+        return {
+            "macro_auc": macro_auc,
+            "micro_auc": micro_auc,
+            "output_path": self.output_path,
+            "auc_csv": auc_csv
+        }
 
-        print(
-            f"\nTop {top_k} classes by AUC:"
-        )
 
-        for result in class_results[:top_k]:
-
-            print(
-                f"{result['name']}: "
-                f"{result['auc']:.4f}"
-            )
-
-        return self.output_path
-
+# =========================================
+# Main
+# =========================================
 
 def main():
-
-    # ---------------------------------
-    # Load configuration
-    # ---------------------------------
 
     config = ConfigLoader.load(
         "configs/colab_config.yaml"
     )
-
-    # ---------------------------------
-    # Checkpoint
-    # ---------------------------------
 
     checkpoint_path = (
         Path(
@@ -450,10 +570,6 @@ def main():
         )
         / "best_model.pth"
     )
-
-    # ---------------------------------
-    # Generate ROC
-    # ---------------------------------
 
     evaluator = ROCEvaluator(
         checkpoint_path=checkpoint_path,

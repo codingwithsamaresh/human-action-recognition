@@ -1,20 +1,20 @@
 """
 Confusion Matrix Generator
 
-Loads the trained CNN-LSTM model,
-runs inference on the test dataset,
-generates a normalized confusion matrix,
-and saves the visualization.
+Generates a normalized confusion matrix
+for the 101-class CNN-LSTM model.
 
-For 101 classes:
-- Uses row-normalized values
-- Removes cell annotations
-- Uses compact axis labels
-- Shows only every Nth label
-- Saves a high-resolution image
+Visualization strategy:
+- Row-normalized confusion matrix
+- No cell annotations
+- Show every Nth class label
+- High-resolution output
+- Save raw and normalized matrices as CSV
 
-Output:
+Outputs:
 outputs/visualizations/confusion_matrix.png
+outputs/reports/confusion_matrix_raw.csv
+outputs/reports/confusion_matrix_normalized.csv
 """
 
 from pathlib import Path
@@ -46,10 +46,13 @@ class ConfusionMatrixEvaluator:
             "confusion_matrix.png"
         ),
         batch_size=8,
-        image_size=224
+        image_size=224,
+        label_step=5
     ):
 
         self.device = get_device()
+
+        self.label_step = label_step
 
         # ---------------------------------
         # Dataset
@@ -98,7 +101,7 @@ class ConfusionMatrixEvaluator:
         )
 
         # ---------------------------------
-        # Output
+        # Output paths
         # ---------------------------------
 
         self.output_path = Path(
@@ -110,6 +113,15 @@ class ConfusionMatrixEvaluator:
             exist_ok=True
         )
 
+        self.report_dir = Path(
+            "outputs/reports"
+        )
+
+        self.report_dir.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
         # ---------------------------------
         # Load checkpoint
         # ---------------------------------
@@ -117,6 +129,10 @@ class ConfusionMatrixEvaluator:
         self._load_checkpoint(
             checkpoint_path
         )
+
+    # =====================================
+    # Load checkpoint
+    # =====================================
 
     def _load_checkpoint(
         self,
@@ -165,6 +181,10 @@ class ConfusionMatrixEvaluator:
             f"{checkpoint_path}"
         )
 
+    # =====================================
+    # Generate confusion matrix
+    # =====================================
+
     @torch.no_grad()
     def generate(self):
 
@@ -211,16 +231,12 @@ class ConfusionMatrixEvaluator:
             return None
 
         # ---------------------------------
-        # Labels
-        # ---------------------------------
-
-        labels = list(
-            range(self.num_classes)
-        )
-
-        # ---------------------------------
         # Raw confusion matrix
         # ---------------------------------
+
+        labels = np.arange(
+            self.num_classes
+        )
 
         cm = confusion_matrix(
             all_targets,
@@ -229,7 +245,7 @@ class ConfusionMatrixEvaluator:
         )
 
         # ---------------------------------
-        # Normalize by true class
+        # Row normalization
         # ---------------------------------
 
         row_sums = cm.sum(
@@ -248,55 +264,88 @@ class ConfusionMatrixEvaluator:
         )
 
         # ---------------------------------
+        # Save raw matrix
+        # ---------------------------------
+
+        raw_csv = (
+            self.report_dir
+            / "confusion_matrix_raw.csv"
+        )
+
+        np.savetxt(
+            raw_csv,
+            cm,
+            delimiter=",",
+            fmt="%d"
+        )
+
+        # ---------------------------------
+        # Save normalized matrix
+        # ---------------------------------
+
+        normalized_csv = (
+            self.report_dir
+            / "confusion_matrix_normalized.csv"
+        )
+
+        np.savetxt(
+            normalized_csv,
+            cm_normalized,
+            delimiter=",",
+            fmt="%.6f"
+        )
+
+        # ---------------------------------
         # Plot
         # ---------------------------------
 
         plt.figure(
-            figsize=(18, 16)
+            figsize=(16, 14)
         )
 
-        sns.heatmap(
+        ax = sns.heatmap(
             cm_normalized,
             cmap="Blues",
             vmin=0,
             vmax=1,
-            annot=False,
             square=True,
-            cbar=True,
             xticklabels=False,
-            yticklabels=False
+            yticklabels=False,
+            cbar_kws={
+                "label": "Normalized Frequency"
+            }
         )
 
         # ---------------------------------
-        # Show only every 5th class label
+        # Select labels
         # ---------------------------------
-
-        step = 5
 
         tick_positions = np.arange(
             0,
             self.num_classes,
-            step
-        ) + 0.5
+            self.label_step
+        )
 
         tick_labels = [
             self.class_names[i]
-            for i in range(
-                0,
-                self.num_classes,
-                step
-            )
+            for i in tick_positions
         ]
 
-        plt.xticks(
-            tick_positions,
+        ax.set_xticks(
+            tick_positions + 0.5
+        )
+
+        ax.set_yticks(
+            tick_positions + 0.5
+        )
+
+        ax.set_xticklabels(
             tick_labels,
             rotation=90,
             fontsize=8
         )
 
-        plt.yticks(
-            tick_positions,
+        ax.set_yticklabels(
             tick_labels,
             rotation=0,
             fontsize=8
@@ -317,19 +366,11 @@ class ConfusionMatrixEvaluator:
         )
 
         plt.title(
-            "Normalized Confusion Matrix - CNN-LSTM on UCF101",
-            fontsize=16
-        )
-
-        # ---------------------------------
-        # Colorbar
-        # ---------------------------------
-
-        colorbar = plt.gca().collections[0].colorbar
-
-        colorbar.set_label(
-            "Normalized Frequency",
-            fontsize=11
+            "Normalized Confusion Matrix - "
+            "CNN-LSTM (101-Class UCF101)",
+            fontsize=16,
+            fontweight="bold",
+            pad=15
         )
 
         # ---------------------------------
@@ -346,27 +387,63 @@ class ConfusionMatrixEvaluator:
 
         plt.close()
 
+        # ---------------------------------
+        # Summary
+        # ---------------------------------
+
         print(
-            f"\nSaved confusion matrix to:\n"
+            "\n========================================"
+        )
+
+        print(
+            "Confusion Matrix Results"
+        )
+
+        print(
+            "========================================"
+        )
+
+        print(
+            f"Classes : "
+            f"{self.num_classes}"
+        )
+
+        print(
+            f"Samples : "
+            f"{len(all_targets)}"
+        )
+
+        print(
+            "========================================"
+        )
+
+        print(
+            f"\nSaved visualization to:\n"
             f"{self.output_path}"
         )
 
-        return cm
+        print(
+            f"\nSaved raw matrix to:\n"
+            f"{raw_csv}"
+        )
 
+        print(
+            f"\nSaved normalized matrix to:\n"
+            f"{normalized_csv}"
+        )
+
+        return cm_normalized
+
+
+# =========================================
+# Main
+# =========================================
 
 def main():
-
-    # ---------------------------------
-    # Load configuration
-    # ---------------------------------
 
     config = ConfigLoader.load(
         "configs/colab_config.yaml"
     )
-
-    # ---------------------------------
-    # Checkpoint
-    # ---------------------------------
 
     checkpoint_path = (
         Path(
@@ -374,10 +451,6 @@ def main():
         )
         / "best_model.pth"
     )
-
-    # ---------------------------------
-    # Generate confusion matrix
-    # ---------------------------------
 
     evaluator = ConfusionMatrixEvaluator(
         checkpoint_path=checkpoint_path,
@@ -387,7 +460,8 @@ def main():
             "confusion_matrix.png"
         ),
         batch_size=config.training.batch_size,
-        image_size=config.dataset.image_size
+        image_size=config.dataset.image_size,
+        label_step=5
     )
 
     evaluator.generate()
